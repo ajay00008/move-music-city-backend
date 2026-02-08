@@ -1,0 +1,8 @@
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=587
+SMTP_SECURE=false
+
+SMTP_USER=ajaynpr1708@gmail.com
+SMTP_PASSWORD=ukawfluvpynrmfjz
+
+SMTP_FROM=ajaynpr1708@gmail.com
