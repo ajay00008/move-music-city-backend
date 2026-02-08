@@ -1,56 +1,93 @@
-# Quick Setup Steps
+# Quick Setup Steps (New Database / Fresh Start)
 
-## Step 1: Create Database (if not exists)
+**You do need to create the database yourself.** The app does not create the PostgreSQL database—only the tables inside it (when `synchronize` runs in development).
 
-Create the database manually using one of these methods:
+---
 
-**Option A: Using psql command line:**
+## Step 1: Create the database
+
+Create an **empty** database. TypeORM will not create it for you.
+
+**Option A – psql:**
 ```bash
-psql -U postgres
-CREATE DATABASE mydb;
-\q
+psql -U postgres -c "CREATE DATABASE mydb;"
 ```
 
-**Option B: Using pgAdmin or any PostgreSQL GUI tool**
+**Option B – pgAdmin or any PostgreSQL GUI:** create a new database (e.g. `mydb`).
 
-**Option C: The database will be auto-created if your PostgreSQL user has permissions**
+---
 
-## Step 2: Verify .env file
+## Step 2: Configure .env
 
-Make sure your `.env` file has:
+Copy `env.example` to `.env` and set at least:
+
 ```env
+NODE_ENV=development
 DATABASE_URL="postgresql://postgres:password@localhost:5432/mydb?schema=public"
 JWT_SECRET=your-super-secret-jwt-key-change-this-in-production
 PORT=3000
 FRONTEND_URL=http://localhost:5173
 ```
 
-## Step 3: Seed the Database
+Use the same database name you created in Step 1.
 
-This will create all tables and add sample data:
+---
+
+## Step 3: Install dependencies (if not done)
+
+```bash
+npm install
+```
+
+---
+
+## Step 4: Create tables and seed data
+
+With `NODE_ENV=development`, TypeORM will create/update tables when the DataSource initializes. Easiest: run the seed (it initializes the DB and then inserts data):
+
 ```bash
 npm run seed
 ```
 
+This will:
+
+- Connect to the DB
+- **Create all tables** (synchronize in development)
+- Insert sample schools, admins, teachers, classes, grade groups, prizes
+
 Expected output:
+
 ```
 🌱 Seeding database...
 ✅ Database connected successfully
 ✅ Seeding completed!
 ```
 
-## Step 4: Start the Server
+---
+
+## Step 5: Start the server
 
 ```bash
 npm run dev
 ```
 
 Expected output:
+
 ```
 ✅ Database connected successfully
 🚀 Server running on http://localhost:3000
-📚 API available at http://localhost:3000/api
 ```
+
+---
+
+## Alternative: create tables by starting the server first
+
+If you prefer not to run the seed:
+
+1. Create the DB and set `.env` (Steps 1–2).
+2. Run **only** the server: `npm run dev`.  
+   On first run, with `NODE_ENV=development`, tables are created automatically.
+3. Optionally run `npm run seed` later to add sample data.
 
 ## Step 5: Test the API
 
