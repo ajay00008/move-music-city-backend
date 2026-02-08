@@ -69,10 +69,10 @@ if (SOCKET_ENABLED) {
   app.set('io', io);
 }
 
-// Initialize database and start server
+// Initialize database and start server (0.0.0.0 = listen on all interfaces for LAN/device access)
 initializeDatabase()
   .then(() => {
-    httpServer.listen(PORT, () => {
+    httpServer.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
       console.log(`📚 API available at http://localhost:${PORT}`);
       if (SOCKET_ENABLED) {
