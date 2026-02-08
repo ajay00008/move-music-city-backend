@@ -25,11 +25,23 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 const SOCKET_ENABLED = process.env.SOCKET_ENABLED !== '0' && process.env.SOCKET_ENABLED !== 'false';
 
-// Middleware
-app.use(cors({
-  origin: FRONTEND_URL.split(',').map((o) => o.trim()).filter(Boolean),
+// Allowed origins: admin panel URLs + mobile app (Origin "null" or missing)
+const allowedOrigins = [
+  ...FRONTEND_URL.split(',').map((o) => o.trim()).filter(Boolean),
+  'null', // React Native / Expo often sends Origin: null
+];
+const corsOptions = {
+  origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+    // Allow requests with no origin (e.g. mobile app, curl, Postman)
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin) || origin === 'null') return cb(null, true);
+    cb(null, false);
+  },
   credentials: true,
-}));
+};
+
+// Middleware
+app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 

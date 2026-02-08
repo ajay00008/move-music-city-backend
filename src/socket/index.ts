@@ -8,6 +8,11 @@ import { classRoom, schoolRoom } from './types';
 const JWT_SECRET = process.env.JWT_SECRET;
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
 
+const allowedOrigins = [
+  ...FRONTEND_URL.split(',').map((o) => o.trim()).filter(Boolean),
+  'null',
+];
+
 export interface SocketUser {
   id: string;
   email: string;
@@ -20,7 +25,7 @@ export type IoServer = Server;
 export function createSocketServer(httpServer: HttpServer): IoServer {
   const io = new Server(httpServer, {
     cors: {
-      origin: FRONTEND_URL.split(',').map((o) => o.trim()).filter(Boolean),
+      origin: allowedOrigins,
       credentials: true,
     },
     path: '/socket.io',
