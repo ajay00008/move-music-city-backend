@@ -252,7 +252,10 @@ gradeGroupRoutes.delete('/:id', authenticate, async (req: AuthRequest, res, next
       const prizeRepo = manager.getRepository(Prize);
       const gradeGroupRepo = manager.getRepository(GradeGroup);
       
-      await prizeRepo.update({ gradeGroupId: id, schoolId: gradeGroup.schoolId }, { deletedAt: new Date() });
+      const prizeWhere = gradeGroup.schoolId != null
+        ? { gradeGroupId: id, schoolId: gradeGroup.schoolId }
+        : { gradeGroupId: id };
+      await prizeRepo.update(prizeWhere, { deletedAt: new Date() });
       
       gradeGroup.deletedAt = new Date();
       await gradeGroupRepo.save(gradeGroup);

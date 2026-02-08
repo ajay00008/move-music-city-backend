@@ -1,7 +1,6 @@
 import { Response, NextFunction } from 'express';
 import { AppError } from './errorHandler';
 import { AuthRequest } from './auth';
-import { prisma } from '../lib/prisma';
 
 export const validateSchoolAccess = async (
   req: AuthRequest,

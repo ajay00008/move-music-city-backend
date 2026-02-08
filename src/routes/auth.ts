@@ -12,6 +12,7 @@ import {
   resetPasswordSchema,
 } from '../validations/auth';
 import { IsNull } from 'typeorm';
+import { Status as TeacherStatus } from '../entities/Teacher';
 
 export const authRoutes = Router();
 
@@ -210,13 +211,13 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       studentCount: 0,
       schoolId: null,
       signupCode,
-      status: 'active',
+      status: TeacherStatus.ACTIVE,
     });
     const saved = await teacherRepo.save(teacher);
 
     res.status(201).json({
       success: true,
-      teacher: { id: saved.id, code: saved.signupCode },
+      teacher: { id: saved.id, code: saved.signupCode! },
       message: 'Please provide this code to your school so they can assign you to classes.',
     });
   } catch (error) {
