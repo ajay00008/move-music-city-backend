@@ -375,7 +375,7 @@ teacherRoutes.put(
   }
 );
 
-// Delete teacher (soft delete)
+// Delete teacher (soft delete). Teachers can delete their own account; school admins can delete their school's teachers.
 teacherRoutes.delete('/:id', authenticate, async (req: AuthRequest, res, next) => {
   try {
     const { id } = req.params;
@@ -389,11 +389,13 @@ teacherRoutes.delete('/:id', authenticate, async (req: AuthRequest, res, next) =
       throw new AppError('Teacher not found', 404);
     }
 
-    // School admins can only delete their school's teachers (not unassigned)
-    if (
+    const isSelfDelete = req.user?.role === 'teacher' && req.user.id === id;
+    const isSchoolAdminDeletingOwnSchool =
       req.user?.role === 'school_admin' &&
-      (teacher.schoolId == null || req.user.schoolId !== teacher.schoolId)
-    ) {
+      teacher.schoolId != null &&
+      req.user.schoolId === teacher.schoolId;
+
+    if (!isSelfDelete && !isSchoolAdminDeletingOwnSchool) {
       throw new AppError('Forbidden - Access denied', 403);
     }
 

@@ -171,10 +171,10 @@ authRoutes.post('/reset-password', validate(resetPasswordSchema), async (req, re
   }
 });
 
-// Teacher Signup (app only: name, email, password, phone → creates teacher with no school; school assigns by 4-digit code)
+// Teacher Signup (app only: name, email, password → creates teacher with no school; school assigns by 4-digit code)
 authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, res, next) => {
   try {
-    const { name, email, password, phone } = req.body;
+    const { name, email, password } = req.body;
     const teacherRepo = getTeacherRepository();
 
     const existing = await teacherRepo.findOne({
@@ -206,7 +206,7 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       name,
       email: email.toLowerCase(),
       password: await hashPassword(password),
-      phone: phone || '',
+      phone: '',
       grade: '',
       studentCount: 0,
       schoolId: null,
