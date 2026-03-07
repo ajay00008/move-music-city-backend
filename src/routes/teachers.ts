@@ -56,11 +56,8 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
         const classTeachers = await classTeacherRepo.find({
           where: { teacherId: teacher.id },
         });
-
-        return {
-          ...teacher,
-          classIds: classTeachers.map((ct) => ct.classId),
-        };
+        const { phone: _p, ...rest } = teacher;
+        return { ...rest, classIds: classTeachers.map((ct) => ct.classId) };
       })
     );
 
@@ -73,50 +70,6 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
         totalPages: Math.ceil(total / limitNum),
         hasNext: pageNum < Math.ceil(total / limitNum),
         hasPrev: pageNum > 1,
-      },
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Get teacher by 4-digit signup code (for school admin to fetch app-signup teachers)
-teacherRoutes.get('/by-code/:code', authenticate, async (req: AuthRequest, res, next) => {
-  try {
-    const { code } = req.params;
-    if (!/^[0-9]{4}$/.test(code)) {
-      throw new AppError('Code invalid or already used', 400);
-    }
-    const teacherRepo = getTeacherRepository();
-    const classTeacherRepo = getClassTeacherRepository();
-
-    const teacher = await teacherRepo.findOne({
-      where: {
-        signupCode: code,
-        deletedAt: IsNull(),
-      },
-    });
-
-    if (!teacher) {
-      throw new AppError('Code invalid or already used', 404);
-    }
-
-    if (
-      req.user?.role === 'school_admin' &&
-      teacher.schoolId != null &&
-      req.user.schoolId !== teacher.schoolId
-    ) {
-      throw new AppError('Forbidden - Access denied', 403);
-    }
-
-    const classTeachers = await classTeacherRepo.find({
-      where: { teacherId: teacher.id },
-    });
-
-    res.json({
-      data: {
-        ...teacher,
-        classIds: classTeachers.map((ct) => ct.classId),
       },
     });
   } catch (error) {
@@ -159,12 +112,10 @@ teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
     const classTeachers = await classTeacherRepo.find({
       where: { teacherId: teacher.id },
     });
+    const { phone: _p, ...rest } = teacher;
 
     res.json({
-      data: {
-        ...teacher,
-        classIds: classTeachers.map((ct) => ct.classId),
-      },
+      data: { ...rest, classIds: classTeachers.map((ct) => ct.classId) },
     });
   } catch (error) {
     next(error);
@@ -179,7 +130,7 @@ teacherRoutes.post(
   validate(createTeacherSchema),
   async (req: AuthRequest, res, next) => {
     try {
-      const { name, email, phone, grade: gradeInput, studentCount, schoolId, classIds, status } = req.body;
+      const { name, email, grade: gradeInput, studentCount, schoolId, classIds, status } = req.body;
       const teacherRepo = getTeacherRepository();
       const schoolRepo = getSchoolRepository();
       const classTeacherRepo = getClassTeacherRepository();
@@ -218,11 +169,11 @@ teacherRoutes.post(
         if (firstClass) grade = firstClass.grade || '';
       }
 
-      // Create teacher
+      // Create teacher (no phone – same payload as app signup)
       const teacher = teacherRepo.create({
         name,
         email: email.toLowerCase(),
-        phone: phone ?? '',
+        phone: '',
         grade,
         studentCount: studentCount ?? 0,
         schoolId,
@@ -244,17 +195,14 @@ teacherRoutes.post(
         await classTeacherRepo.save(classTeacherRecords);
       }
 
-      // Fetch with relations for response
       const classTeachers = await classTeacherRepo.find({
         where: { teacherId: savedTeacher.id },
       });
+      const { phone: _p, ...teacherData } = savedTeacher;
 
       res.status(201).json({
         success: true,
-        data: {
-          ...savedTeacher,
-          classIds: classTeachers.map((ct) => ct.classId),
-        },
+        data: { ...teacherData, classIds: classTeachers.map((ct) => ct.classId) },
       });
     } catch (error) {
       next(error);
@@ -271,6 +219,7 @@ teacherRoutes.put(
     try {
       const { id } = req.params;
       const updateData: any = { ...req.body };
+      delete updateData.phone; // not collected or displayed
       const teacherRepo = getTeacherRepository();
       const classTeacherRepo = getClassTeacherRepository();
       const classRepo = getClassRepository();
@@ -357,17 +306,14 @@ teacherRoutes.put(
       Object.assign(existing, updateData);
       const updatedTeacher = await teacherRepo.save(existing);
 
-      // Get updated class relationships
       const classTeachers = await classTeacherRepo.find({
         where: { teacherId: updatedTeacher.id },
       });
+      const { phone: _p2, ...updatedData } = updatedTeacher;
 
       res.json({
         success: true,
-        data: {
-          ...updatedTeacher,
-          classIds: classTeachers.map((ct) => ct.classId),
-        },
+        data: { ...updatedData, classIds: classTeachers.map((ct) => ct.classId) },
       });
     } catch (error) {
       next(error);

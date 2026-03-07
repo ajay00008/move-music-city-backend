@@ -3,8 +3,7 @@ import { z } from 'zod';
 export const createTeacherSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   email: z.string().email('Invalid email address'),
-  phone: z.string().optional().default(''),
-  grade: z.string().default(''), // Derived from assigned grades (classes) when classIds provided
+  grade: z.string().default(''),
   studentCount: z.number().int().min(0).default(0),
   schoolId: z.string().min(1, 'School ID is required'),
   classIds: z.array(z.string()).default([]),
@@ -15,7 +14,6 @@ export const createTeacherSchema = z.object({
 export const updateTeacherSchema = z.object({
   name: z.string().min(1).optional(),
   email: z.string().email().optional(),
-  phone: z.string().optional(),
   grade: z.string().optional(),
   studentCount: z.number().int().min(0).optional(),
   schoolId: z.string().uuid().nullable().optional(),

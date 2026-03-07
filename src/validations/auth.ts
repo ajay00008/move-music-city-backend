@@ -29,5 +29,8 @@ export const teacherSignupSchema = z.object({
   email: z.string().email('Invalid email address'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
   schoolId: z.string().uuid().optional().nullable(),
-  grade: z.string().optional().default(''), // e.g. "K-2" or "3-5" from grade group label/name
+  grade: z.string().optional().default(''),
+  classIds: z.array(z.string().uuid()).optional().default([]),
+  studentCount: z.number().int().min(0).optional().default(0),
+  status: z.enum(['active', 'inactive']).optional().default('active'),
 });

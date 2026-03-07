@@ -171,11 +171,13 @@ authRoutes.post('/reset-password', validate(resetPasswordSchema), async (req, re
   }
 });
 
-// Teacher Signup (app: name, email, password; optional school and grade from dropdowns)
+// Teacher Signup (same payload as admin create: name, email, password, schoolId, classIds, grade, studentCount, status)
 authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, res, next) => {
   try {
-    const { name, email, password, schoolId, grade } = req.body;
+    const { name, email, password, schoolId, grade, classIds, studentCount, status } = req.body;
     const teacherRepo = getTeacherRepository();
+    const classRepo = getClassRepository();
+    const classTeacherRepo = getClassTeacherRepository();
 
     const existing = await teacherRepo.findOne({
       where: { email: email.toLowerCase(), deletedAt: IsNull() },
@@ -184,22 +186,12 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       throw new AppError('A teacher with this email already exists', 400);
     }
 
-    let signupCode: string | null = null;
-    for (let attempt = 0; attempt < 20; attempt++) {
-      const code = String(1000 + Math.floor(Math.random() * 9000));
-      const taken = await teacherRepo.findOne({
-        where: { signupCode: code, deletedAt: IsNull() },
+    let gradeRes = grade ?? '';
+    if (!gradeRes && classIds?.length > 0) {
+      const firstClass = await classRepo.findOne({
+        where: { id: classIds[0], deletedAt: IsNull() },
       });
-      if (!taken) {
-        signupCode = code;
-        break;
-      }
-      if (attempt === 19) {
-        throw new AppError('Could not generate a unique code. Please try again.', 500);
-      }
-    }
-    if (!signupCode) {
-      throw new AppError('Could not generate a unique code. Please try again.', 500);
+      if (firstClass) gradeRes = firstClass.grade || '';
     }
 
     const teacher = teacherRepo.create({
@@ -207,18 +199,25 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       email: email.toLowerCase(),
       password: await hashPassword(password),
       phone: '',
-      grade: grade ?? '',
-      studentCount: 0,
+      grade: gradeRes,
+      studentCount: studentCount ?? 0,
       schoolId: schoolId ?? null,
-      signupCode,
-      status: TeacherStatus.ACTIVE,
+      signupCode: null,
+      status: (status === 'inactive' ? TeacherStatus.INACTIVE : TeacherStatus.ACTIVE),
     });
     const saved = await teacherRepo.save(teacher);
 
+    if (classIds && classIds.length > 0) {
+      const classTeacherRecords = classIds.map((classId: string) =>
+        classTeacherRepo.create({ classId, teacherId: saved.id })
+      );
+      await classTeacherRepo.save(classTeacherRecords);
+    }
+
     res.status(201).json({
       success: true,
-      teacher: { id: saved.id, code: saved.signupCode! },
-      message: 'Please provide this code to your school so they can assign you to classes.',
+      teacher: { id: saved.id },
+      message: 'Account created. You can log in.',
     });
   } catch (error) {
     next(error);
@@ -255,12 +254,10 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
       throw new AppError('Invalid email or password', 401);
     }
 
-    // Not assigned to a school: do not log in; return code so they can give it to the school
     if (teacher.schoolId == null) {
       return res.status(200).json({
         notAssigned: true,
-        code: teacher.signupCode || '',
-        message: 'Give this code to your school so they can assign you. You can log in after you are assigned.',
+        message: 'You are not assigned to a school yet. Contact your school admin to get access.',
       });
     }
 
