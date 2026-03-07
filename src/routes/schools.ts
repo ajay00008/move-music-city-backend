@@ -7,8 +7,24 @@ import { createSchoolSchema, updateSchoolSchema } from '../validations/school';
 import { IsNull, Not, ILike } from 'typeorm';
 import { hashPassword } from '../lib/utils';
 import { UserRole, Status as UserStatus } from '../entities/User';
+import { Status as SchoolStatus } from '../entities/School';
 
 export const schoolRoutes = Router();
+
+// Public: list school names and ids (for teacher signup dropdown)
+schoolRoutes.get('/list', async (req, res, next) => {
+  try {
+    const schoolRepo = getSchoolRepository();
+    const schools = await schoolRepo.find({
+      where: { deletedAt: IsNull(), status: SchoolStatus.ACTIVE },
+      select: ['id', 'name'],
+      order: { name: 'ASC' },
+    });
+    res.json({ data: schools });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Get all schools
 schoolRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
@@ -462,19 +478,24 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
 
     const earnedPrizes = await earnedPrizeRepo.find({
       where,
-      relations: ['prize', 'class'],
+      relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
       order: { earnedAt: 'DESC' },
     });
 
-    const formatted = earnedPrizes.map((ep) => ({
-      id: ep.id,
-      prizeId: ep.prizeId,
-      classId: ep.classId,
-      className: ep.class.name,
-      schoolId: ep.schoolId,
-      earnedAt: ep.earnedAt.toISOString().split('T')[0],
-      delivered: ep.delivered,
-    }));
+    const formatted = earnedPrizes.map((ep) => {
+      const firstTeacher = ep.class?.teachers?.[0]?.teacher;
+      return {
+        id: ep.id,
+        prizeId: ep.prizeId,
+        classId: ep.classId,
+        className: ep.class.name,
+        teacherName: firstTeacher?.name ?? null,
+        studentCount: ep.class?.studentCount ?? 0,
+        schoolId: ep.schoolId,
+        earnedAt: ep.earnedAt.toISOString().split('T')[0],
+        delivered: ep.delivered,
+      };
+    });
 
     res.json({ data: formatted });
   } catch (error) {

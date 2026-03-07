@@ -41,21 +41,26 @@ earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => 
         where,
         skip: (pageNum - 1) * limitNum,
         take: limitNum,
-        relations: ['prize', 'class'],
+        relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
         order: { earnedAt: 'DESC' },
       }),
       earnedPrizeRepo.count({ where }),
     ]);
 
-    const formatted = earnedPrizes.map((ep) => ({
-      id: ep.id,
-      prizeId: ep.prizeId,
-      classId: ep.classId,
-      className: ep.class.name,
-      schoolId: ep.schoolId,
-      earnedAt: ep.earnedAt.toISOString().split('T')[0],
-      delivered: ep.delivered,
-    }));
+    const formatted = earnedPrizes.map((ep) => {
+      const firstTeacher = ep.class?.teachers?.[0]?.teacher;
+      return {
+        id: ep.id,
+        prizeId: ep.prizeId,
+        classId: ep.classId,
+        className: ep.class.name,
+        teacherName: firstTeacher?.name ?? null,
+        studentCount: ep.class?.studentCount ?? 0,
+        schoolId: ep.schoolId,
+        earnedAt: ep.earnedAt.toISOString().split('T')[0],
+        delivered: ep.delivered,
+      };
+    });
 
     res.json({
       data: formatted,
@@ -84,7 +89,7 @@ earnedPrizeRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) 
         id,
         deletedAt: IsNull(),
       },
-      relations: ['prize', 'class'],
+      relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
     });
 
     if (!earnedPrize) {
@@ -95,11 +100,14 @@ earnedPrizeRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) 
       throw new AppError('Forbidden - Access denied', 403);
     }
 
+    const firstTeacher = earnedPrize.class?.teachers?.[0]?.teacher;
     const formatted = {
       id: earnedPrize.id,
       prizeId: earnedPrize.prizeId,
       classId: earnedPrize.classId,
       className: earnedPrize.class.name,
+      teacherName: firstTeacher?.name ?? null,
+      studentCount: earnedPrize.class?.studentCount ?? 0,
       schoolId: earnedPrize.schoolId,
       earnedAt: earnedPrize.earnedAt.toISOString().split('T')[0],
       delivered: earnedPrize.delivered,
@@ -143,14 +151,16 @@ earnedPrizeRoutes.patch(
 
       const updatedWithRelations = await earnedPrizeRepo.findOne({
         where: { id },
-        relations: ['prize', 'class'],
+        relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
       });
-
+      const firstTeacher = updatedWithRelations?.class?.teachers?.[0]?.teacher;
       const formatted = {
         id: updated.id,
         prizeId: updated.prizeId,
         classId: updated.classId,
         className: updatedWithRelations?.class.name || '',
+        teacherName: firstTeacher?.name ?? null,
+        studentCount: updatedWithRelations?.class?.studentCount ?? 0,
         schoolId: updated.schoolId,
         earnedAt: updated.earnedAt.toISOString().split('T')[0],
         delivered: updated.delivered,

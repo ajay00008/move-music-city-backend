@@ -11,6 +11,21 @@ import { GradeGroup } from '../entities/GradeGroup';
 
 export const gradeGroupRoutes = Router();
 
+// Public: list global grade groups (schoolId null) for teacher signup dropdown (e.g. K-2, 3-5)
+gradeGroupRoutes.get('/list', async (req, res, next) => {
+  try {
+    const gradeGroupRepo = getGradeGroupRepository();
+    const gradeGroups = await gradeGroupRepo.find({
+      where: { deletedAt: IsNull(), schoolId: IsNull() },
+      select: ['id', 'name', 'label'],
+      order: { name: 'ASC' },
+    });
+    res.json({ data: gradeGroups });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get all grade groups
 gradeGroupRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
@@ -20,13 +35,12 @@ gradeGroupRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       deletedAt: IsNull(),
     };
 
-    // School admins can only see their school's grade groups
-    if (req.user?.role === 'school_admin' && req.user.schoolId) {
-      where.schoolId = req.user.schoolId;
-    } else {
-      // For super admin, exclude null schoolIds (migrated data)
-      where.schoolId = Not(IsNull());
+    // School admins see only global grade groups (K-2, 3-5) set by super admin
+    if (req.user?.role === 'school_admin') {
+      where.schoolId = IsNull();
     }
+    // Super admin sees all (global and per-school)
+    // else: no extra filter
 
     const gradeGroups = await gradeGroupRepo.find({
       where,
@@ -51,14 +65,11 @@ gradeGroupRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) =
     const { id } = req.params;
     const gradeGroupRepo = getGradeGroupRepository();
 
-    let where: any = {
-      id,
-      deletedAt: IsNull(),
-    };
-
-    // School admins can only see their school's grade groups
+    let where: any = { id, deletedAt: IsNull() };
     if (req.user?.role === 'school_admin' && req.user.schoolId) {
-      where.schoolId = req.user.schoolId;
+      where = [{ id, deletedAt: IsNull(), schoolId: IsNull() }, { id, deletedAt: IsNull(), schoolId: req.user.schoolId }];
+    } else if (req.user?.role !== 'super_admin' && req.user?.schoolId) {
+      where = [{ id, deletedAt: IsNull(), schoolId: IsNull() }, { id, deletedAt: IsNull(), schoolId: req.user.schoolId }];
     }
 
     const gradeGroup = await gradeGroupRepo.findOne({
@@ -91,30 +102,27 @@ gradeGroupRoutes.post(
       const schoolRepo = getSchoolRepository();
       const classRepo = getClassRepository();
 
-      let targetSchoolId = schoolId;
-      if (req.user?.role === 'school_admin') {
-        targetSchoolId = req.user.schoolId;
+      // Only super_admin can create grade groups (global or per-school)
+      if (req.user?.role !== 'super_admin') {
+        throw new AppError('Grade groups are set at the super admin level. Contact your administrator.', 403);
       }
 
-      if (!targetSchoolId) {
-        throw new AppError('School ID is required', 400);
-      }
+      let targetSchoolId: string | null = schoolId ?? null;
+      // Super admin can create global grade groups (schoolId null) for K-2, 3-5 used across all schools
 
-      const school = await schoolRepo.findOne({
-        where: {
-          id: targetSchoolId,
-          deletedAt: IsNull(),
-        },
-      });
-
-      if (!school) {
-        throw new AppError('School not found', 404);
+      if (targetSchoolId) {
+        const school = await schoolRepo.findOne({
+          where: { id: targetSchoolId, deletedAt: IsNull() },
+        });
+        if (!school) {
+          throw new AppError('School not found', 404);
+        }
       }
 
       let gradesToStore = grades ?? null;
       let classEntities: Awaited<ReturnType<typeof classRepo.find>> = [];
 
-      if (classIds && classIds.length > 0) {
+      if (classIds && classIds.length > 0 && targetSchoolId) {
         const classes = await classRepo.find({
           where: { id: In(classIds), schoolId: targetSchoolId, deletedAt: IsNull() },
         });

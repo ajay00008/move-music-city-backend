@@ -44,7 +44,7 @@ function normalizeGrades(v: unknown): string | null | undefined {
 export const createGradeGroupSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   label: z.string().min(1, 'Label is required'),
-  schoolId: z.string().uuid().optional(),
+  schoolId: z.string().uuid().optional().nullable(), // null = global grade group (super admin only)
   grades: z.union([z.string(), z.array(z.string())]).optional().transform((v) => normalizeGrades(v)),
   classIds: z.array(z.string().uuid()).optional().default([]),
 });
@@ -62,7 +62,7 @@ export const createPrizeSchema = z.object({
   minutesRequired: z.number().int().min(0, 'Minutes required must be non-negative'),
   icon: z.string().min(1, 'Icon is required'),
   gradeGroupId: z.string().min(1, 'Grade group ID is required'),
-  schoolId: z.string().uuid().optional(), // Optional for super admin, auto-set for school admin
+  schoolId: z.string().uuid().optional().nullable(), // Optional/null for super admin (global prize)
 });
 
 export const updatePrizeSchema = z.object({

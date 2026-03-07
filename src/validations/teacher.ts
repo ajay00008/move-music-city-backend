@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const createTeacherSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   email: z.string().email('Invalid email address'),
-  phone: z.string().min(1, 'Phone is required'),
+  phone: z.string().optional().default(''),
   grade: z.string().default(''), // Derived from assigned grades (classes) when classIds provided
   studentCount: z.number().int().min(0).default(0),
   schoolId: z.string().min(1, 'School ID is required'),

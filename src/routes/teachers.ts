@@ -222,9 +222,9 @@ teacherRoutes.post(
       const teacher = teacherRepo.create({
         name,
         email: email.toLowerCase(),
-        phone,
+        phone: phone ?? '',
         grade,
-        studentCount: studentCount || 0,
+        studentCount: studentCount ?? 0,
         schoolId,
         status: status || 'active',
       });

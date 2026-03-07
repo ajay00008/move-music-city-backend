@@ -41,11 +41,11 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       deletedAt: IsNull(),
     };
 
-    // School admins and teachers see their school's prizes; super_admin sees all
+    // School admins and teachers see global prizes (schoolId null) + their school's prizes; super_admin sees all
     if (req.user?.role === 'school_admin' && req.user.schoolId) {
-      where.schoolId = req.user.schoolId;
+      where.schoolId = In([req.user.schoolId, null]);
     } else if (req.user?.role === 'teacher' && req.user.schoolId) {
-      where.schoolId = req.user.schoolId;
+      where.schoolId = In([req.user.schoolId, null]);
       const schoolId = req.user.schoolId;
 
       // When classId is provided: show only prizes from grade groups that contain this class (so switching class shows correct prizes)
@@ -67,7 +67,7 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
         const gradeGroupsWithClass = await gradeGroupRepo
           .createQueryBuilder('gg')
           .innerJoin('gg.classes', 'c', 'c.id = :classId', { classId })
-          .where('gg.schoolId = :schoolId', { schoolId })
+          .andWhere('(gg.schoolId = :schoolId OR gg.schoolId IS NULL)', { schoolId })
           .andWhere('gg.deletedAt IS NULL')
           .select(['gg.id'])
           .getMany();
@@ -78,7 +78,7 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
         const teacherGrade = req.user.teacherGrade ?? null;
         if (teacherGrade) {
           const schoolGradeGroups = await gradeGroupRepo.find({
-            where: { schoolId: req.user!.schoolId!, deletedAt: IsNull() },
+            where: [{ schoolId: req.user!.schoolId!, deletedAt: IsNull() }, { schoolId: IsNull(), deletedAt: IsNull() }],
             select: ['id', 'grades'],
           });
           const matchingGradeGroupIds = schoolGradeGroups
@@ -164,24 +164,24 @@ prizeRoutes.post(
       const prizeRepo = getPrizeRepository();
       const gradeGroupRepo = getGradeGroupRepository();
 
-      // Determine schoolId: from body (super admin) or from user (school admin)
-      let targetSchoolId = schoolId;
-      if (req.user?.role === 'school_admin') {
-        targetSchoolId = req.user.schoolId;
+      // Only super_admin can create prizes (global or per-school)
+      if (req.user?.role !== 'super_admin') {
+        throw new AppError('Prizes are set at the super admin level. Contact your administrator.', 403);
       }
 
-      if (!targetSchoolId) {
-        throw new AppError('School ID is required', 400);
-      }
+      // Determine schoolId: from body. Super admin can set null for global prizes.
+      let targetSchoolId: string | null = schoolId ?? null;
 
-      // Verify grade group exists and belongs to the same school
-      let gradeGroupWhere: any = {
-        id: gradeGroupId,
-        deletedAt: IsNull(),
-      };
-      if (req.user?.role === 'school_admin') {
-        gradeGroupWhere.schoolId = targetSchoolId;
+      if (targetSchoolId === undefined) {
+        targetSchoolId = null;
       }
+      // targetSchoolId can be null for super_admin (global prize)
+
+      // Verify grade group exists and (belongs to the same school or is global)
+      let gradeGroupWhere: any =
+        targetSchoolId
+          ? [{ id: gradeGroupId, deletedAt: IsNull(), schoolId: targetSchoolId }, { id: gradeGroupId, deletedAt: IsNull(), schoolId: IsNull() }]
+          : { id: gradeGroupId, deletedAt: IsNull(), schoolId: IsNull() };
 
       const gradeGroup = await gradeGroupRepo.findOne({
         where: gradeGroupWhere,
@@ -191,8 +191,7 @@ prizeRoutes.post(
         throw new AppError('Grade group not found', 404);
       }
 
-      // Ensure grade group belongs to the target school
-      if (gradeGroup.schoolId !== targetSchoolId) {
+      if (targetSchoolId && gradeGroup.schoolId !== null && gradeGroup.schoolId !== targetSchoolId) {
         throw new AppError('Grade group does not belong to this school', 403);
       }
 
@@ -207,15 +206,17 @@ prizeRoutes.post(
 
       const saved = await prizeRepo.save(prize);
 
-      emitSchoolPrizeCreated({
-        schoolId: targetSchoolId,
-        prizeId: saved.id,
-        name: saved.name,
-        gradeGroupId: gradeGroup.id,
-        gradeGroupName: gradeGroup.name,
-        minutesRequired: saved.minutesRequired,
-        icon: saved.icon,
-      });
+      if (targetSchoolId) {
+        emitSchoolPrizeCreated({
+          schoolId: targetSchoolId,
+          prizeId: saved.id,
+          name: saved.name,
+          gradeGroupId: gradeGroup.id,
+          gradeGroupName: gradeGroup.name,
+          minutesRequired: saved.minutesRequired,
+          icon: saved.icon,
+        });
+      }
 
       res.status(201).json({
         success: true,
