@@ -5,7 +5,9 @@ import cors from 'cors';
 import dotenv from 'dotenv';
 import 'express-async-errors';
 import { initializeDatabase } from './config/database';
+import { getClassRepository } from './lib/repositories';
 import { errorHandler } from './middleware/errorHandler';
+import { IsNull } from 'typeorm';
 import { authRoutes } from './routes/auth';
 import { schoolRoutes } from './routes/schools';
 import { teacherRoutes } from './routes/teachers';
@@ -48,6 +50,22 @@ app.use(express.urlencoded({ extended: true }));
 // Health check
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Public: list classes by school (teacher signup) – path must not start with /classes or /schools
+app.get('/school-classes/:schoolId', async (req, res, next) => {
+  try {
+    const { schoolId } = req.params;
+    const classRepo = getClassRepository();
+    const classes = await classRepo.find({
+      where: { schoolId, deletedAt: IsNull() },
+      select: ['id', 'name', 'grade', 'section'],
+      order: { grade: 'ASC', name: 'ASC' },
+    });
+    res.json({ data: classes });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // API Routes

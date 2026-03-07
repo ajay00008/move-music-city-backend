@@ -26,6 +26,22 @@ schoolRoutes.get('/list', async (req, res, next) => {
   }
 });
 
+// Public: list classes by school (for teacher signup – no auth). Must be before /:id.
+schoolRoutes.get('/:schoolId/classes/list', async (req, res, next) => {
+  try {
+    const { schoolId } = req.params;
+    const classRepo = getClassRepository();
+    const classes = await classRepo.find({
+      where: { schoolId, deletedAt: IsNull() },
+      select: ['id', 'name', 'grade', 'section'],
+      order: { grade: 'ASC', name: 'ASC' },
+    });
+    res.json({ data: classes });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get all schools
 schoolRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
