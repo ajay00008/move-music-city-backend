@@ -169,27 +169,17 @@ prizeRoutes.post(
         throw new AppError('Prizes are set at the super admin level. Contact your administrator.', 403);
       }
 
-      // Determine schoolId: from body. Super admin can set null for global prizes.
-      let targetSchoolId: string | null = schoolId ?? null;
-
-      if (targetSchoolId === undefined) {
-        targetSchoolId = null;
-      }
-      // targetSchoolId can be null for super_admin (global prize)
-
-      // Verify grade group exists and (belongs to the same school or is global)
-      let gradeGroupWhere: any =
-        targetSchoolId
-          ? [{ id: gradeGroupId, deletedAt: IsNull(), schoolId: targetSchoolId }, { id: gradeGroupId, deletedAt: IsNull(), schoolId: IsNull() }]
-          : { id: gradeGroupId, deletedAt: IsNull(), schoolId: IsNull() };
-
+      // Verify grade group exists
       const gradeGroup = await gradeGroupRepo.findOne({
-        where: gradeGroupWhere,
+        where: { id: gradeGroupId, deletedAt: IsNull() },
       });
 
       if (!gradeGroup) {
         throw new AppError('Grade group not found', 404);
       }
+
+      // Determine schoolId: use explicit body value, fall back to grade group's schoolId
+      let targetSchoolId: string | null = schoolId !== undefined ? (schoolId ?? null) : (gradeGroup.schoolId ?? null);
 
       if (targetSchoolId && gradeGroup.schoolId !== null && gradeGroup.schoolId !== targetSchoolId) {
         throw new AppError('Grade group does not belong to this school', 403);
