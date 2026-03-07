@@ -56,7 +56,7 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
         const classTeachers = await classTeacherRepo.find({
           where: { teacherId: teacher.id },
         });
-        const { phone: _p, ...rest } = teacher;
+        const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
         return { ...rest, classIds: classTeachers.map((ct) => ct.classId) };
       })
     );
@@ -112,7 +112,7 @@ teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
     const classTeachers = await classTeacherRepo.find({
       where: { teacherId: teacher.id },
     });
-    const { phone: _p, ...rest } = teacher;
+    const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
 
     res.json({
       data: { ...rest, classIds: classTeachers.map((ct) => ct.classId) },
@@ -198,7 +198,7 @@ teacherRoutes.post(
       const classTeachers = await classTeacherRepo.find({
         where: { teacherId: savedTeacher.id },
       });
-      const { phone: _p, ...teacherData } = savedTeacher;
+      const { password: _pw, signupCode: _sc, phone: _p, ...teacherData } = savedTeacher;
 
       res.status(201).json({
         success: true,
@@ -309,7 +309,7 @@ teacherRoutes.put(
       const classTeachers = await classTeacherRepo.find({
         where: { teacherId: updatedTeacher.id },
       });
-      const { phone: _p2, ...updatedData } = updatedTeacher;
+      const { password: _pw2, signupCode: _sc2, phone: _p2, ...updatedData } = updatedTeacher;
 
       res.json({
         success: true,
