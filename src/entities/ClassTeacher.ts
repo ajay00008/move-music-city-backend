@@ -25,6 +25,10 @@ export class ClassTeacher {
   @Index()
   teacherId: string;
 
+  /** Per-teacher fitness minutes for this class. Each teacher's data is independent. */
+  @Column({ type: 'int', default: 0 })
+  fitnessMinutes: number;
+
   @CreateDateColumn()
   createdAt: Date;
 

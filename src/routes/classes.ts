@@ -7,6 +7,25 @@ import { ensureSchoolAdminSchool } from '../middleware/validateSchoolAccess';
 import { validate } from '../middleware/validate';
 import { createClassSchema, updateClassSchema, addMinutesSchema } from '../validations/class';
 import { IsNull, ILike, In } from 'typeorm';
+
+/** Class total minutes = Class.fitnessMinutes (admin-added) + sum(ClassTeacher.fitnessMinutes) (teacher-added). */
+async function getClassTotalMinutes(
+  classItem: { id: string; fitnessMinutes: number },
+  classTeacherRepo: ReturnType<typeof getClassTeacherRepository>
+): Promise<number> {
+  const links = await classTeacherRepo.find({
+    where: { classId: classItem.id },
+    select: ['fitnessMinutes'],
+  });
+  const teacherTotal = links.reduce((sum, ct) => sum + (ct.fitnessMinutes ?? 0), 0);
+  return (classItem.fitnessMinutes ?? 0) + teacherTotal;
+}
+
+/** For a teacher, get their minutes for a class (from their ClassTeacher link). */
+function getTeacherMinutesForClass(links: { teacherId: string; fitnessMinutes?: number }[], teacherId: string): number {
+  const link = links.find((l) => l.teacherId === teacherId);
+  return link?.fitnessMinutes ?? 0;
+}
 import { emitClassMinutesUpdated, emitSchoolPrizeEarned } from '../socket/emitter';
 
 const FALLBACK_STEP = 100;
@@ -54,19 +73,34 @@ function getSegmentProgress(
 
 export const classRoutes = Router();
 
-// Get all classes (school_admin, teacher, super_admin)
+// Get all classes (school_admin, teacher, super_admin). Teachers only see their assigned classes.
 classRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
     const { schoolId, search, page = '1', limit = '10' } = req.query;
     const pageNum = parseInt(page as string);
     const limitNum = parseInt(limit as string);
     const classRepo = getClassRepository();
+    const classTeacherRepo = getClassTeacherRepository();
 
     let where: any = {
       deletedAt: IsNull(),
     };
 
-    if (req.user?.role === 'school_admin' || req.user?.role === 'teacher') {
+    if (req.user?.role === 'teacher') {
+      // Teachers only see classes they are assigned to
+      const myLinks = await classTeacherRepo.find({
+        where: { teacherId: req.user!.id },
+        select: ['classId'],
+      });
+      const myClassIds = myLinks.map((l) => l.classId);
+      if (myClassIds.length === 0) {
+        return res.json({
+          data: [],
+          pagination: { page: pageNum, limit: limitNum, total: 0, totalPages: 0, hasNext: false, hasPrev: false },
+        });
+      }
+      where.id = In(myClassIds);
+    } else if (req.user?.role === 'school_admin') {
       where.schoolId = req.user.schoolId;
     } else if (schoolId) {
       where.schoolId = schoolId;
@@ -86,7 +120,6 @@ classRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       classRepo.count({ where }),
     ]);
 
-    const classTeacherRepo = getClassTeacherRepository();
     const earnedPrizeRepo = getEarnedPrizeRepository();
     const prizeRepo = getPrizeRepository();
 
@@ -127,14 +160,20 @@ classRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
           where: { classId: classItem.id, deletedAt: IsNull() },
         });
         const schoolPrizes = prizesBySchool[classItem.schoolId] ?? [];
+        // Teachers see only their own minutes; admins see class total (Class + sum of all teachers)
+        const effectiveMinutes =
+          req.user?.role === 'teacher'
+            ? getTeacherMinutesForClass(classTeachers, req.user.id)
+            : await getClassTotalMinutes(classItem, classTeacherRepo);
         const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(
-          classItem.fitnessMinutes,
+          effectiveMinutes,
           earnedCount,
           schoolPrizes
         );
 
         return {
           ...classItem,
+          fitnessMinutes: effectiveMinutes,
           teacherIds: classTeachers.map((ct) => ct.teacherId),
           primaryTeacherName: displayTeacherName,
           earnedPrizesCount: earnedCount,
@@ -182,8 +221,9 @@ classRoutes.post(
         throw new AppError('Class not found', 404);
       }
 
+      let link: { fitnessMinutes: number } | null = null;
       if (req.user?.role === 'teacher') {
-        const link = await classTeacherRepo.findOne({
+        link = await classTeacherRepo.findOne({
           where: { classId, teacherId: req.user.id },
         });
         if (!link) {
@@ -195,9 +235,27 @@ classRoutes.post(
         throw new AppError('Forbidden', 403);
       }
 
-      const newFitnessMinutes = classItem.fitnessMinutes + minutes;
-      classItem.fitnessMinutes = newFitnessMinutes;
-      const savedClass = await classRepo.save(classItem);
+      let newFitnessMinutes: number; // class total (for prize logic)
+      let teacherMinutesForResponse: number | null = null; // teacher's own minutes (for response)
+      if (req.user?.role === 'teacher' && link) {
+        // Store minutes on the teacher's ClassTeacher record so each account is independent
+        const teacherNewMinutes = (link.fitnessMinutes ?? 0) + minutes;
+        teacherMinutesForResponse = teacherNewMinutes;
+        await classTeacherRepo.update(
+          { classId, teacherId: req.user!.id },
+          { fitnessMinutes: teacherNewMinutes }
+        );
+        newFitnessMinutes = await getClassTotalMinutes(classItem, classTeacherRepo);
+      } else {
+        // School admin / super_admin: update class-level minutes
+        newFitnessMinutes = classItem.fitnessMinutes + minutes;
+        classItem.fitnessMinutes = newFitnessMinutes;
+        await classRepo.save(classItem);
+      }
+
+      const savedClass = await classRepo.findOne({
+        where: { id: classId, deletedAt: IsNull() },
+      })!;
 
       const schoolPrizes = await prizeRepo.find({
         where: { schoolId: classItem.schoolId, deletedAt: IsNull() },
@@ -243,8 +301,10 @@ classRoutes.post(
         where: { classId, deletedAt: IsNull() },
       });
 
+      const minutesForSegment =
+        teacherMinutesForResponse !== null ? teacherMinutesForResponse : newFitnessMinutes;
       const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(
-        newFitnessMinutes,
+        minutesForSegment,
         earnedCount,
         schoolPrizes
       );
@@ -267,11 +327,12 @@ classRoutes.post(
         });
       }
 
+      const responseMinutes = teacherMinutesForResponse !== null ? teacherMinutesForResponse : newFitnessMinutes;
       res.json({
         success: true,
         data: {
           ...savedClass,
-          fitnessMinutes: newFitnessMinutes,
+          fitnessMinutes: responseMinutes,
           primaryTeacherName: displayTeacherName,
           earnedPrizesCount: earnedCount,
           currentSegmentMinutes,
@@ -308,11 +369,12 @@ classRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
     if (req.user?.role === 'school_admin' && req.user.schoolId !== classItem.schoolId) {
       throw new AppError('Forbidden - Access denied', 403);
     }
+    let teacherLink: { fitnessMinutes?: number } | null = null;
     if (req.user?.role === 'teacher') {
-      const link = await classTeacherRepo.findOne({
+      teacherLink = await classTeacherRepo.findOne({
         where: { classId: id, teacherId: req.user.id },
       });
-      if (!link) {
+      if (!teacherLink) {
         throw new AppError('Forbidden - Access denied', 403);
       }
     }
@@ -339,8 +401,12 @@ classRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
       where: { schoolId: classItem.schoolId, deletedAt: IsNull() },
       order: { minutesRequired: 'ASC', createdAt: 'ASC' },
     });
+    const effectiveMinutes =
+      req.user?.role === 'teacher' && teacherLink
+        ? (teacherLink.fitnessMinutes ?? 0)
+        : await getClassTotalMinutes(classItem, classTeacherRepo);
     const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(
-      classItem.fitnessMinutes,
+      effectiveMinutes,
       earnedPrizesCount,
       schoolPrizes
     );
@@ -348,6 +414,7 @@ classRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
     res.json({
       data: {
         ...classItem,
+        fitnessMinutes: effectiveMinutes,
         teacherIds: classTeachers.map((ct) => ct.teacherId),
         primaryTeacherName: displayTeacherName,
         earnedPrizesCount,

@@ -80,10 +80,18 @@ export const initializeDatabase = async () => {
 
 async function migrateExistingData() {
   try {
-    const { getSchoolRepository, getGradeGroupRepository, getPrizeRepository } = await import('../lib/repositories');
+    const {
+      getSchoolRepository,
+      getGradeGroupRepository,
+      getPrizeRepository,
+      getClassRepository,
+      getClassTeacherRepository,
+    } = await import('../lib/repositories');
     const schoolRepo = getSchoolRepository();
     const gradeGroupRepo = getGradeGroupRepository();
     const prizeRepo = getPrizeRepository();
+    const classRepo = getClassRepository();
+    const classTeacherRepo = getClassTeacherRepository();
 
     // Get the first school (or create a default one if none exists)
     const schools = await schoolRepo.find({ take: 1 });
@@ -124,7 +132,32 @@ async function migrateExistingData() {
       }
     }
 
-    if (gradeGroupsWithoutSchool.length > 0 || prizesWithoutSchool.length > 0) {
+    // One-time backfill: copy Class.fitnessMinutes to first ClassTeacher per class so
+    // existing minutes show under one teacher and class totals stay correct.
+    const classesWithMinutes = await classRepo.find({
+      where: {},
+      select: ['id', 'fitnessMinutes'],
+    });
+    let backfilled = 0;
+    for (const c of classesWithMinutes) {
+      if (!c.fitnessMinutes || c.fitnessMinutes <= 0) continue;
+      const links = await classTeacherRepo.find({
+        where: { classId: c.id },
+        order: { createdAt: 'ASC' },
+        take: 1,
+      });
+      const first = links[0];
+      if (first && (first.fitnessMinutes ?? 0) === 0) {
+        await classTeacherRepo.update(first.id, { fitnessMinutes: c.fitnessMinutes });
+        await classRepo.update(c.id, { fitnessMinutes: 0 });
+        backfilled += 1;
+      }
+    }
+    if (backfilled > 0) {
+      console.log(`📝 Backfilled fitness minutes to ${backfilled} class-teacher link(s)`);
+    }
+
+    if (gradeGroupsWithoutSchool.length > 0 || prizesWithoutSchool.length > 0 || backfilled > 0) {
       console.log('✅ Migration completed');
     }
   } catch (error) {

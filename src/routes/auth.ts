@@ -282,6 +282,7 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
         })
       : [];
 
+    const linkByClassId = new Map(classTeachers.map((ct) => [ct.classId, ct]));
     res.json({
       success: true,
       token,
@@ -295,14 +296,17 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
         schoolId: teacher.schoolId,
         classIds,
       },
-      classes: classes.map((c) => ({
-        id: c.id,
-        name: c.name,
-        grade: c.grade,
-        section: c.section,
-        studentCount: c.studentCount,
-        fitnessMinutes: c.fitnessMinutes,
-      })),
+      classes: classes.map((c) => {
+        const link = linkByClassId.get(c.id);
+        return {
+          id: c.id,
+          name: c.name,
+          grade: c.grade,
+          section: c.section,
+          studentCount: c.studentCount,
+          fitnessMinutes: link?.fitnessMinutes ?? 0,
+        };
+      }),
       school: school ? { id: school.id, name: school.name } : { id: teacher.schoolId, name: '' },
     });
   } catch (error) {
