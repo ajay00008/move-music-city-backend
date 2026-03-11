@@ -82,13 +82,11 @@ async function migrateExistingData() {
   try {
     const {
       getSchoolRepository,
-      getGradeGroupRepository,
       getPrizeRepository,
       getClassRepository,
       getClassTeacherRepository,
     } = await import('../lib/repositories');
     const schoolRepo = getSchoolRepository();
-    const gradeGroupRepo = getGradeGroupRepository();
     const prizeRepo = getPrizeRepository();
     const classRepo = getClassRepository();
     const classTeacherRepo = getClassTeacherRepository();
@@ -102,22 +100,10 @@ async function migrateExistingData() {
 
     const defaultSchool = schools[0];
 
-    // Update grade groups without schoolId
-    const gradeGroupsWithoutSchool = await gradeGroupRepo
-      .createQueryBuilder('gradeGroup')
-      .where('gradeGroup.schoolId IS NULL')
-      .andWhere('gradeGroup.deletedAt IS NULL')
-      .getMany();
-    
-    if (gradeGroupsWithoutSchool.length > 0) {
-      console.log(`📝 Migrating ${gradeGroupsWithoutSchool.length} grade groups to school: ${defaultSchool.name}`);
-      for (const gradeGroup of gradeGroupsWithoutSchool) {
-        gradeGroup.schoolId = defaultSchool.id;
-        await gradeGroupRepo.save(gradeGroup);
-      }
-    }
+    // Grade groups with schoolId null are intentionally GLOBAL (shared across all schools).
+    // Do not reassign them to a school.
 
-    // Update prizes without schoolId
+    // Update prizes without schoolId (only prizes; grade groups stay global when null)
     const prizesWithoutSchool = await prizeRepo
       .createQueryBuilder('prize')
       .where('prize.schoolId IS NULL')
@@ -157,7 +143,7 @@ async function migrateExistingData() {
       console.log(`📝 Backfilled fitness minutes to ${backfilled} class-teacher link(s)`);
     }
 
-    if (gradeGroupsWithoutSchool.length > 0 || prizesWithoutSchool.length > 0 || backfilled > 0) {
+    if (prizesWithoutSchool.length > 0 || backfilled > 0) {
       console.log('✅ Migration completed');
     }
   } catch (error) {

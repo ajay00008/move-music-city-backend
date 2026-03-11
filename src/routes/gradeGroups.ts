@@ -195,18 +195,24 @@ gradeGroupRoutes.put(
         throw new AppError('Grade group not found', 404);
       }
 
-      delete updateData.schoolId;
+      // Only super_admin may change schoolId (e.g. set to null for global)
+      if (req.user?.role !== 'super_admin') {
+        delete updateData.schoolId;
+      } else if (updateData.schoolId !== undefined) {
+        gradeGroup.schoolId = updateData.schoolId ?? null;
+        if (gradeGroup.schoolId == null) {
+          gradeGroup.classes = [];
+          gradeGroup.grades = null;
+        }
+        delete updateData.schoolId;
+      }
       const classIds = updateData.classIds;
       delete updateData.classIds;
 
       if (classIds !== undefined) {
-        if (classIds.length > 0) {
-          const targetSchoolId = gradeGroup.schoolId;
-          if (!targetSchoolId) {
-            throw new AppError('Grade group has no school', 400);
-          }
+        if (classIds.length > 0 && gradeGroup.schoolId) {
           const classes = await classRepo.find({
-            where: { id: In(classIds), schoolId: targetSchoolId, deletedAt: IsNull() },
+            where: { id: In(classIds), schoolId: gradeGroup.schoolId, deletedAt: IsNull() },
           });
           if (classes.length !== classIds.length) {
             throw new AppError('One or more class IDs are invalid or do not belong to this school', 400);

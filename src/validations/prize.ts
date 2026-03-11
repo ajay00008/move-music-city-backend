@@ -52,6 +52,7 @@ export const createGradeGroupSchema = z.object({
 export const updateGradeGroupSchema = z.object({
   name: z.string().min(1).optional(),
   label: z.string().min(1).optional(),
+  schoolId: z.string().uuid().nullable().optional(), // null = global (super_admin only)
   grades: z.union([z.string(), z.array(z.string()), z.null()]).optional().transform((v) => normalizeGrades(v)),
   classIds: z.array(z.string().uuid()).optional(),
 });
