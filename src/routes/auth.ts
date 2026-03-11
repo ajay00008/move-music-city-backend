@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getUserRepository, getTeacherRepository, getSchoolRepository, getGradeGroupRepository } from '../lib/repositories';
+import { getUserRepository, getTeacherRepository, getSchoolRepository, getGradeGroupRepository, getClassRepository, getClassTeacherRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, generateToken } from '../lib/utils';
 import { validate } from '../middleware/validate';
@@ -13,6 +13,8 @@ import {
 } from '../validations/auth';
 import { IsNull } from 'typeorm';
 import { Status as TeacherStatus } from '../entities/Teacher';
+import { ClassTeacher } from '../entities/ClassTeacher';
+import { Class } from '../entities/Class';
 
 export const authRoutes = Router();
 
@@ -269,14 +271,16 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
     const classTeachers = await classTeacherRepo.find({
       where: { teacherId: teacher.id },
     });
-    const classIds = classTeachers.map((ct) => ct.classId);
-    const classes = classIds.length
+    const classIds = classTeachers.map((ct: ClassTeacher) => ct.classId);
+    const classes: Class[] = classIds.length
       ? await classRepo.find({
-          where: classIds.map((id) => ({ id, deletedAt: IsNull() })),
+          where: classIds.map((id: string) => ({ id, deletedAt: IsNull() })),
         })
       : [];
 
-    const linkByClassId = new Map(classTeachers.map((ct) => [ct.classId, ct]));
+    const linkByClassId = new Map<string, ClassTeacher>(
+      classTeachers.map((ct: ClassTeacher) => [ct.classId, ct])
+    );
     res.json({
       success: true,
       token,
@@ -290,7 +294,7 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
         schoolId: teacher.schoolId,
         classIds,
       },
-      classes: classes.map((c) => {
+      classes: classes.map((c: Class) => {
         const link = linkByClassId.get(c.id);
         return {
           id: c.id,
