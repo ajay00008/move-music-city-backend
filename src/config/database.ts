@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import path from 'path';
 import { DataSource } from 'typeorm';
 import dotenv from 'dotenv';
 
@@ -14,6 +15,12 @@ import { ClassTeacher } from '../entities/ClassTeacher';
 import { GradeGroup } from '../entities/GradeGroup';
 import { Prize } from '../entities/Prize';
 import { EarnedPrize } from '../entities/EarnedPrize';
+
+// When running from dist/ (compiled), use compiled migrations so Node doesn't try to load .ts
+const isCompiled = __dirname.includes(path.sep + 'dist' + path.sep) || __dirname.endsWith(path.sep + 'dist');
+const migrationsPath = isCompiled
+  ? [path.join(__dirname, '..', 'migrations', '**', '*.js')]
+  : ['src/migrations/**/*.ts'];
 
 // Parse DATABASE_URL or use individual connection parameters
 function getDatabaseConfig() {
@@ -33,7 +40,7 @@ function getDatabaseConfig() {
         synchronize: process.env.NODE_ENV === 'development',
         logging: process.env.NODE_ENV === 'development',
         entities: [User, School, Teacher, Class, ClassTeacher, GradeGroup, Prize, EarnedPrize],
-        migrations: ['src/migrations/**/*.ts'],
+        migrations: migrationsPath,
         subscribers: ['src/subscribers/**/*.ts'],
         extra: {
           ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
@@ -55,7 +62,7 @@ function getDatabaseConfig() {
     synchronize: process.env.NODE_ENV === 'development',
     logging: process.env.NODE_ENV === 'development',
     entities: [User, School, Teacher, Class, ClassTeacher, GradeGroup, Prize, EarnedPrize],
-    migrations: ['src/migrations/**/*.ts'],
+    migrations: migrationsPath,
     subscribers: ['src/subscribers/**/*.ts'],
     extra: {
       ssl: process.env.DATABASE_SSL === 'true' ? { rejectUnauthorized: false } : false,
