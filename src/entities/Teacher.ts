@@ -11,6 +11,7 @@ import {
   Index,
 } from 'typeorm';
 import { School } from './School';
+import { GradeGroup } from './GradeGroup';
 import { ClassTeacher } from './ClassTeacher';
 
 export enum Status {
@@ -51,6 +52,10 @@ export class Teacher {
   @Index()
   schoolId: string | null;
 
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  gradeGroupId: string | null;
+
   @Column({
     type: 'enum',
     enum: Status,
@@ -70,6 +75,10 @@ export class Teacher {
   @ManyToOne(() => School, (school) => school.teachers)
   @JoinColumn({ name: 'schoolId' })
   school: School;
+
+  @ManyToOne(() => GradeGroup, { nullable: true })
+  @JoinColumn({ name: 'gradeGroupId' })
+  gradeGroup: GradeGroup | null;
 
   @OneToMany(() => ClassTeacher, (classTeacher) => classTeacher.teacher)
   classes: ClassTeacher[];

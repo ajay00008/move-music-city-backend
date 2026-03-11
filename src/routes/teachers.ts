@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getTeacherRepository, getSchoolRepository, getClassTeacherRepository, getClassRepository } from '../lib/repositories';
+import { getTeacherRepository, getSchoolRepository, getClassTeacherRepository, getClassRepository, getGradeGroupRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { ensureSchoolAdminSchool } from '../middleware/validateSchoolAccess';
@@ -13,7 +13,7 @@ export const teacherRoutes = Router();
 // Get all teachers
 teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRequest, res, next) => {
   try {
-    const { schoolId, search, status, page = '1', limit = '10' } = req.query;
+    const { schoolId, search, status, page = '1', limit = '10' } = req.query as Record<string, string>;
     const pageNum = parseInt(page as string);
     const limitNum = parseInt(limit as string);
     const teacherRepo = getTeacherRepository();
@@ -130,70 +130,54 @@ teacherRoutes.post(
   validate(createTeacherSchema),
   async (req: AuthRequest, res, next) => {
     try {
-      const { name, email, grade: gradeInput, studentCount, schoolId, classIds, status } = req.body;
+      const { name, email, studentCount, schoolId, gradeGroupId, status } = req.body;
       const teacherRepo = getTeacherRepository();
       const schoolRepo = getSchoolRepository();
       const classTeacherRepo = getClassTeacherRepository();
-      const classRepo = getClassRepository();
+      const gradeGroupRepo = getGradeGroupRepository();
 
-      // Verify school exists
+      const resolvedSchoolId = schoolId || req.user?.schoolId;
+      if (!resolvedSchoolId) {
+        throw new AppError('School is required', 400);
+      }
+
       const school = await schoolRepo.findOne({
-        where: {
-          id: schoolId,
-          deletedAt: IsNull(),
-        },
+        where: { id: resolvedSchoolId, deletedAt: IsNull() },
       });
-
       if (!school) {
         throw new AppError('School not found', 404);
       }
 
-      // Check if email already exists
-      const existing = await teacherRepo.findOne({
-        where: {
-          email: email.toLowerCase(),
-          deletedAt: IsNull(),
-        },
+      const gradeGroup = await gradeGroupRepo.findOne({
+        where: { id: gradeGroupId, deletedAt: IsNull() },
       });
+      if (!gradeGroup) {
+        throw new AppError('Grade group not found', 404);
+      }
 
+      const existing = await teacherRepo.findOne({
+        where: { email: email.toLowerCase(), deletedAt: IsNull() },
+      });
       if (existing) {
         throw new AppError('Teacher with this email already exists', 400);
       }
 
-      // Grade comes from first assigned class (grades = classes in this school)
-      let grade = gradeInput || '';
-      if (!grade && classIds?.length > 0) {
-        const firstClass = await classRepo.findOne({
-          where: { id: classIds[0], deletedAt: IsNull() },
-        });
-        if (firstClass) grade = firstClass.grade || '';
-      }
+      const gradeLabel = gradeGroup.label || gradeGroup.name || '';
 
-      // Create teacher (no phone – same payload as app signup)
       const teacher = teacherRepo.create({
         name,
         email: email.toLowerCase(),
         phone: '',
-        grade,
+        grade: gradeLabel,
         studentCount: studentCount ?? 0,
-        schoolId,
+        schoolId: resolvedSchoolId,
+        gradeGroupId,
         status: status || 'active',
       });
       if (req.body.password) {
         teacher.password = await hashPassword(req.body.password);
       }
       const savedTeacher = await teacherRepo.save(teacher);
-
-      // Create class relationships
-      if (classIds && classIds.length > 0) {
-        const classTeacherRecords = classIds.map((classId: string) =>
-          classTeacherRepo.create({
-            classId,
-            teacherId: savedTeacher.id,
-          })
-        );
-        await classTeacherRepo.save(classTeacherRecords);
-      }
 
       const classTeachers = await classTeacherRepo.find({
         where: { teacherId: savedTeacher.id },
@@ -275,30 +259,26 @@ teacherRoutes.put(
         updateData.signupCode = null;
       }
 
-      // Handle class relationships and derive grade from first assigned class
-      if (updateData.classIds !== undefined) {
-        // Delete existing relationships
-        await classTeacherRepo.delete({ teacherId: id });
-
-        if (updateData.classIds.length > 0) {
-          const classTeacherRecords = updateData.classIds.map((classId: string) =>
-            classTeacherRepo.create({
-              classId,
-              teacherId: id,
-            })
-          );
-          await classTeacherRepo.save(classTeacherRecords);
-          // Grade = first assigned class's grade (grades = classes in this school)
-          if (updateData.grade === undefined || updateData.grade === '') {
-            const firstClass = await classRepo.findOne({
-              where: { id: updateData.classIds[0], deletedAt: IsNull() },
-            });
-            if (firstClass) updateData.grade = firstClass.grade || '';
+      // Handle grade group: set grade from grade group label
+      if (updateData.gradeGroupId !== undefined) {
+        if (updateData.gradeGroupId) {
+          const gradeGroupRepo = getGradeGroupRepository();
+          const gradeGroup = await gradeGroupRepo.findOne({
+            where: { id: updateData.gradeGroupId, deletedAt: IsNull() },
+          });
+          if (gradeGroup) {
+            updateData.grade = gradeGroup.label || gradeGroup.name || '';
           }
         } else {
           updateData.grade = updateData.grade ?? '';
         }
+      }
 
+      // Clear class relationships when using grade-group flow (no classIds sent)
+      if (updateData.classIds !== undefined && Array.isArray(updateData.classIds) && updateData.classIds.length === 0) {
+        await classTeacherRepo.delete({ teacherId: id });
+        delete updateData.classIds;
+      } else if (updateData.classIds !== undefined) {
         delete updateData.classIds;
       }
 

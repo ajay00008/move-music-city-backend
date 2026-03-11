@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getUserRepository, getTeacherRepository, getSchoolRepository, getClassRepository, getClassTeacherRepository } from '../lib/repositories';
+import { getUserRepository, getTeacherRepository, getSchoolRepository, getGradeGroupRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, generateToken } from '../lib/utils';
 import { validate } from '../middleware/validate';
@@ -171,13 +171,12 @@ authRoutes.post('/reset-password', validate(resetPasswordSchema), async (req, re
   }
 });
 
-// Teacher Signup (same payload as admin create: name, email, password, schoolId, classIds, grade, studentCount, status)
+// Teacher Signup: name, email, password, gradeGroupId (no school or classes)
 authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, res, next) => {
   try {
-    const { name, email, password, schoolId, grade, classIds, studentCount, status } = req.body;
+    const { name, email, password, gradeGroupId, studentCount, status } = req.body;
     const teacherRepo = getTeacherRepository();
-    const classRepo = getClassRepository();
-    const classTeacherRepo = getClassTeacherRepository();
+    const gradeGroupRepo = getGradeGroupRepository();
 
     const existing = await teacherRepo.findOne({
       where: { email: email.toLowerCase(), deletedAt: IsNull() },
@@ -186,33 +185,28 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       throw new AppError('A teacher with this email already exists', 400);
     }
 
-    let gradeRes = grade ?? '';
-    if (!gradeRes && classIds?.length > 0) {
-      const firstClass = await classRepo.findOne({
-        where: { id: classIds[0], deletedAt: IsNull() },
-      });
-      if (firstClass) gradeRes = firstClass.grade || '';
+    const gradeGroup = await gradeGroupRepo.findOne({
+      where: { id: gradeGroupId, deletedAt: IsNull() },
+    });
+    if (!gradeGroup) {
+      throw new AppError('Grade group not found', 404);
     }
+
+    const gradeLabel = gradeGroup.label || gradeGroup.name || '';
 
     const teacher = teacherRepo.create({
       name,
       email: email.toLowerCase(),
       password: await hashPassword(password),
       phone: '',
-      grade: gradeRes,
+      grade: gradeLabel,
       studentCount: studentCount ?? 0,
-      schoolId: schoolId ?? null,
+      schoolId: null,
+      gradeGroupId,
       signupCode: null,
       status: (status === 'inactive' ? TeacherStatus.INACTIVE : TeacherStatus.ACTIVE),
     });
     const saved = await teacherRepo.save(teacher);
-
-    if (classIds && classIds.length > 0) {
-      const classTeacherRecords = classIds.map((classId: string) =>
-        classTeacherRepo.create({ classId, teacherId: saved.id })
-      );
-      await classTeacherRepo.save(classTeacherRecords);
-    }
 
     res.status(201).json({
       success: true,
