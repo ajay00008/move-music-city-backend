@@ -173,10 +173,10 @@ authRoutes.post('/reset-password', validate(resetPasswordSchema), async (req, re
   }
 });
 
-// Teacher Signup: name, email, password, gradeGroupId (no school or classes)
+// Teacher Signup: name, email, password, schoolId (optional), gradeGroupId
 authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, res, next) => {
   try {
-    const { name, email, password, gradeGroupId, studentCount, status } = req.body;
+    const { name, email, password, schoolId, gradeGroupId, studentCount, status } = req.body;
     const teacherRepo = getTeacherRepository();
     const gradeGroupRepo = getGradeGroupRepository();
 
@@ -203,7 +203,7 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       phone: '',
       grade: gradeLabel,
       studentCount: studentCount ?? 0,
-      schoolId: null,
+      schoolId: schoolId ?? null,
       gradeGroupId,
       signupCode: null,
       status: (status === 'inactive' ? TeacherStatus.INACTIVE : TeacherStatus.ACTIVE),

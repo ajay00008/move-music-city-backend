@@ -11,7 +11,8 @@ import { GradeGroup } from '../entities/GradeGroup';
 
 export const gradeGroupRoutes = Router();
 
-// Public: list grade groups for teacher signup. Optional schoolId: return global + that school's grade groups.
+// Public: list grade groups for teacher signup (no auth). Returns all grade groups so signup always has options.
+// Optional ?schoolId=:id returns only global + that school's grade groups.
 gradeGroupRoutes.get('/list', async (req, res, next) => {
   try {
     const schoolId = (req.query.schoolId as string)?.trim() || null;
@@ -19,7 +20,7 @@ gradeGroupRoutes.get('/list', async (req, res, next) => {
 
     const where = schoolId
       ? [{ deletedAt: IsNull(), schoolId: IsNull() }, { deletedAt: IsNull(), schoolId }]
-      : { deletedAt: IsNull(), schoolId: IsNull() };
+      : { deletedAt: IsNull() };
 
     const gradeGroups = await gradeGroupRepo.find({
       where,
