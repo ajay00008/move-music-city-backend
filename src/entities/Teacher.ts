@@ -7,7 +7,9 @@ import {
   DeleteDateColumn,
   ManyToOne,
   OneToMany,
+  ManyToMany,
   JoinColumn,
+  JoinTable,
   Index,
 } from 'typeorm';
 import { School } from './School';
@@ -87,6 +89,15 @@ export class Teacher {
   @ManyToOne(() => GradeGroup, { nullable: true })
   @JoinColumn({ name: 'gradeGroupId' })
   gradeGroup: GradeGroup | null;
+
+  /** All grade groups assigned to this teacher (primary is gradeGroupId). */
+  @ManyToMany(() => GradeGroup)
+  @JoinTable({
+    name: 'teacher_grade_groups',
+    joinColumn: { name: 'teacherId', referencedColumnName: 'id' },
+    inverseJoinColumn: { name: 'gradeGroupId', referencedColumnName: 'id' },
+  })
+  gradeGroups: GradeGroup[];
 
   @OneToMany(() => ClassTeacher, (classTeacher) => classTeacher.teacher)
   classes: ClassTeacher[];

@@ -46,22 +46,27 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       where.schoolId = In([req.user.schoolId, null]);
     } else if (req.user?.role === 'teacher' && req.user.schoolId) {
       where.schoolId = In([req.user.schoolId, null]);
-      // Teachers: show only prizes for their assigned grade group (no class flow)
-      const teacherGradeGroupId = req.user.teacherGradeGroupId ?? null;
-      if (teacherGradeGroupId) {
-        where.gradeGroupId = teacherGradeGroupId;
+      // Teachers: show prizes for all their assigned grade groups
+      const teacherGradeGroupIds = req.user.teacherGradeGroupIds ?? [];
+      if (teacherGradeGroupIds.length > 0) {
+        where.gradeGroupId = In(teacherGradeGroupIds);
       } else {
-        const teacherGrade = req.user.teacherGrade ?? null;
-        if (teacherGrade) {
-          const schoolGradeGroups = await gradeGroupRepo.find({
-            where: [{ schoolId: req.user!.schoolId!, deletedAt: IsNull() }, { schoolId: IsNull(), deletedAt: IsNull() }],
-            select: ['id', 'grades'],
-          });
-          const matchingGradeGroupIds = schoolGradeGroups
-            .filter((gg) => gradeGroupMatchesTeacher(gg, teacherGrade))
-            .map((gg) => gg.id);
-          if (schoolGradeGroups.length > 0) {
-            where.gradeGroupId = In(matchingGradeGroupIds.length ? matchingGradeGroupIds : []);
+        const teacherGradeGroupId = req.user.teacherGradeGroupId ?? null;
+        if (teacherGradeGroupId) {
+          where.gradeGroupId = teacherGradeGroupId;
+        } else {
+          const teacherGrade = req.user.teacherGrade ?? null;
+          if (teacherGrade) {
+            const schoolGradeGroups = await gradeGroupRepo.find({
+              where: [{ schoolId: req.user!.schoolId!, deletedAt: IsNull() }, { schoolId: IsNull(), deletedAt: IsNull() }],
+              select: ['id', 'grades'],
+            });
+            const matchingGradeGroupIds = schoolGradeGroups
+              .filter((gg) => gradeGroupMatchesTeacher(gg, teacherGrade))
+              .map((gg) => gg.id);
+            if (schoolGradeGroups.length > 0) {
+              where.gradeGroupId = In(matchingGradeGroupIds.length ? matchingGradeGroupIds : []);
+            }
           }
         }
       }

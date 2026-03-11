@@ -7,7 +7,7 @@ import { validate } from '../middleware/validate';
 import { createTeacherSchema, updateTeacherSchema } from '../validations/teacher';
 import { addMinutesSchema } from '../validations/class';
 import { hashPassword } from '../lib/utils';
-import { IsNull, ILike, Not } from 'typeorm';
+import { IsNull, ILike, Not, In } from 'typeorm';
 import { Status as TeacherStatus } from '../entities/Teacher';
 
 const FALLBACK_STEP = 100;
@@ -80,13 +80,19 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
         skip: (pageNum - 1) * limitNum,
         take: limitNum,
         order: { createdAt: 'DESC' },
+        relations: ['gradeGroups'],
       }),
       teacherRepo.count({ where }),
     ]);
 
     const formattedTeachers = teachers.map((teacher) => {
-      const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
-      return rest;
+      const { password: _pw, signupCode: _sc, phone: _p, gradeGroups: _gg, ...rest } = teacher;
+      const gradeGroupIds = (teacher.gradeGroups ?? []).length > 0
+        ? teacher.gradeGroups!.map((g) => g.id)
+        : teacher.gradeGroupId
+          ? [teacher.gradeGroupId]
+          : [];
+      return { ...rest, gradeGroupIds };
     });
 
     res.json({
@@ -197,7 +203,7 @@ teacherRoutes.post(
   }
 );
 
-// Leaderboard: teachers in the same grade group as the current teacher (ordered by fitnessMinutes desc). Teacher-only.
+// Leaderboard: teachers who share at least one grade group with the current teacher (same school). Teacher-only.
 teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res, next) => {
   try {
     if (req.user?.role !== 'teacher') {
@@ -206,23 +212,42 @@ teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res,
     const teacherRepo = getTeacherRepository();
     const current = await teacherRepo.findOne({
       where: { id: req.user!.id, deletedAt: IsNull() },
-      select: ['id', 'gradeGroupId', 'schoolId'],
+      relations: ['gradeGroups'],
     });
-    if (!current || !current.gradeGroupId || current.schoolId == null) {
+    if (!current || current.schoolId == null) {
       return res.json({ data: [] });
     }
     const schoolId = current.schoolId as string;
-    const teachers = await teacherRepo.find({
-      where: {
-        gradeGroupId: current.gradeGroupId,
-        schoolId,
-        deletedAt: IsNull(),
-        status: TeacherStatus.ACTIVE,
-      },
-      select: ['id', 'name', 'grade', 'fitnessMinutes', 'earnedPrizesCount'],
-      order: { fitnessMinutes: 'DESC', earnedPrizesCount: 'DESC' },
+    const myGradeGroupIds =
+      (current.gradeGroups?.length ?? 0) > 0
+        ? current.gradeGroups!.map((g) => g.id)
+        : current.gradeGroupId
+          ? [current.gradeGroupId]
+          : [];
+    if (myGradeGroupIds.length === 0) {
+      return res.json({ data: [] });
+    }
+    const teachers = await teacherRepo
+      .createQueryBuilder('t')
+      .leftJoin('t.gradeGroups', 'gg')
+      .where('t.schoolId = :schoolId', { schoolId })
+      .andWhere('t.deletedAt IS NULL')
+      .andWhere('t.status = :status', { status: TeacherStatus.ACTIVE })
+      .andWhere(
+        '(t.gradeGroupId IN (:...ids) OR gg.id IN (:...ids))',
+        { ids: myGradeGroupIds }
+      )
+      .select(['t.id', 't.name', 't.grade', 't.fitnessMinutes', 't.earnedPrizesCount'])
+      .orderBy('t.fitnessMinutes', 'DESC')
+      .addOrderBy('t.earnedPrizesCount', 'DESC')
+      .getMany();
+    const seen = new Set<string>();
+    const unique = teachers.filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
     });
-    const data = teachers.map((t) => ({
+    const data = unique.map((t) => ({
       id: t.id,
       name: t.name,
       grade: t.grade ?? '',
@@ -242,10 +267,8 @@ teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
     const teacherRepo = getTeacherRepository();
 
     const teacher = await teacherRepo.findOne({
-      where: {
-        id,
-        deletedAt: IsNull(),
-      },
+      where: { id, deletedAt: IsNull() },
+      relations: ['gradeGroups'],
     });
 
     if (!teacher) {
@@ -264,9 +287,14 @@ teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
       throw new AppError('Forbidden - Access denied', 403);
     }
 
-    const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
+    const { password: _pw, signupCode: _sc, phone: _p, gradeGroups: _gg, ...rest } = teacher;
+    const gradeGroupIds = (teacher.gradeGroups ?? []).length > 0
+      ? teacher.gradeGroups!.map((g) => g.id)
+      : teacher.gradeGroupId
+        ? [teacher.gradeGroupId]
+        : [];
     res.json({
-      data: rest,
+      data: { ...rest, gradeGroupIds },
     });
   } catch (error) {
     next(error);
@@ -281,10 +309,19 @@ teacherRoutes.post(
   validate(createTeacherSchema),
   async (req: AuthRequest, res, next) => {
     try {
-      const { name, email, studentCount, schoolId, gradeGroupId, status } = req.body;
+      const { name, email, studentCount, schoolId, gradeGroupId, gradeGroupIds, status } = req.body;
       const teacherRepo = getTeacherRepository();
       const schoolRepo = getSchoolRepository();
       const gradeGroupRepo = getGradeGroupRepository();
+
+      const ids = Array.isArray(gradeGroupIds) && gradeGroupIds.length > 0
+        ? gradeGroupIds
+        : gradeGroupId
+          ? [gradeGroupId]
+          : [];
+      if (ids.length === 0) {
+        throw new AppError('At least one grade group is required (gradeGroupId or gradeGroupIds)', 400);
+      }
 
       const resolvedSchoolId = schoolId || req.user?.schoolId;
       if (!resolvedSchoolId) {
@@ -298,12 +335,14 @@ teacherRoutes.post(
         throw new AppError('School not found', 404);
       }
 
-      const gradeGroup = await gradeGroupRepo.findOne({
-        where: { id: gradeGroupId, deletedAt: IsNull() },
+      const gradeGroups = await gradeGroupRepo.find({
+        where: { id: In(ids), deletedAt: IsNull() },
       });
-      if (!gradeGroup) {
-        throw new AppError('Grade group not found', 404);
+      if (gradeGroups.length !== ids.length) {
+        throw new AppError('One or more grade groups not found', 404);
       }
+      const primary = gradeGroups[0];
+      const gradeLabel = primary.label || primary.name || '';
 
       const existing = await teacherRepo.findOne({
         where: { email: email.toLowerCase(), deletedAt: IsNull() },
@@ -312,8 +351,6 @@ teacherRoutes.post(
         throw new AppError('Teacher with this email already exists', 400);
       }
 
-      const gradeLabel = gradeGroup.label || gradeGroup.name || '';
-
       const teacher = teacherRepo.create({
         name,
         email: email.toLowerCase(),
@@ -321,18 +358,19 @@ teacherRoutes.post(
         grade: gradeLabel,
         studentCount: studentCount ?? 0,
         schoolId: resolvedSchoolId,
-        gradeGroupId,
+        gradeGroupId: primary.id,
         status: status || 'active',
       });
       if (req.body.password) {
         teacher.password = await hashPassword(req.body.password);
       }
+      teacher.gradeGroups = gradeGroups;
       const savedTeacher = await teacherRepo.save(teacher);
       const { password: _pw, signupCode: _sc, phone: _p, ...teacherData } = savedTeacher;
 
       res.status(201).json({
         success: true,
-        data: teacherData,
+        data: { ...teacherData, gradeGroupIds: gradeGroups.map((g) => g.id) },
       });
     } catch (error) {
       next(error);
@@ -352,9 +390,9 @@ teacherRoutes.put(
       delete updateData.phone; // not collected or displayed
       const teacherRepo = getTeacherRepository();
 
-      // Get existing teacher
       const existing = await teacherRepo.findOne({
         where: { id, deletedAt: IsNull() },
+        relations: ['gradeGroups'],
       });
 
       if (!existing) {
@@ -403,19 +441,32 @@ teacherRoutes.put(
         updateData.signupCode = null;
       }
 
-      // Handle grade group: set grade from grade group label
-      if (updateData.gradeGroupId !== undefined) {
-        if (updateData.gradeGroupId) {
-          const gradeGroupRepo = getGradeGroupRepository();
-          const gradeGroup = await gradeGroupRepo.findOne({
-            where: { id: updateData.gradeGroupId, deletedAt: IsNull() },
-          });
-          if (gradeGroup) {
-            updateData.grade = gradeGroup.label || gradeGroup.name || '';
-          }
+      const gradeGroupRepo = getGradeGroupRepository();
+
+      // Handle grade groups: gradeGroupIds (array) or gradeGroupId (single)
+      const requestedGradeGroupIds = updateData.gradeGroupIds !== undefined
+        ? updateData.gradeGroupIds
+        : updateData.gradeGroupId !== undefined
+          ? (updateData.gradeGroupId ? [updateData.gradeGroupId] : [])
+          : undefined;
+      if (requestedGradeGroupIds !== undefined) {
+        if (requestedGradeGroupIds.length === 0) {
+          existing.gradeGroupId = null;
+          existing.grade = '';
+          existing.gradeGroups = [];
         } else {
-          updateData.grade = updateData.grade ?? '';
+          const gradeGroups = await gradeGroupRepo.find({
+            where: { id: In(requestedGradeGroupIds), deletedAt: IsNull() },
+          });
+          if (gradeGroups.length !== requestedGradeGroupIds.length) {
+            throw new AppError('One or more grade groups not found', 404);
+          }
+          existing.gradeGroupId = gradeGroups[0].id;
+          existing.grade = gradeGroups[0].label || gradeGroups[0].name || '';
+          existing.gradeGroups = gradeGroups;
         }
+        delete updateData.gradeGroupIds;
+        delete updateData.gradeGroupId;
       }
 
       if (updateData.classIds !== undefined) delete updateData.classIds;
@@ -423,11 +474,20 @@ teacherRoutes.put(
       // Update teacher
       Object.assign(existing, updateData);
       const updatedTeacher = await teacherRepo.save(existing);
-      const { password: _pw2, signupCode: _sc2, phone: _p2, ...updatedData } = updatedTeacher;
+      const withGroups = await teacherRepo.findOne({
+        where: { id: updatedTeacher.id },
+        relations: ['gradeGroups'],
+      });
+      const { password: _pw2, signupCode: _sc2, phone: _p2, gradeGroups: _gg2, ...updatedData } = updatedTeacher;
+      const gradeGroupIds = (withGroups?.gradeGroups ?? []).length > 0
+        ? withGroups!.gradeGroups!.map((g) => g.id)
+        : updatedTeacher.gradeGroupId
+          ? [updatedTeacher.gradeGroupId]
+          : [];
 
       res.json({
         success: true,
-        data: updatedData,
+        data: { ...updatedData, gradeGroupIds },
       });
     } catch (error) {
       next(error);

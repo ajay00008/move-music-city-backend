@@ -14,8 +14,10 @@ export interface AuthRequest extends Request {
     name?: string | null;
     /** Set when role is teacher; used to filter prizes by grade group */
     teacherGrade?: string | null;
-    /** Set when role is teacher; used to show prizes for assigned grade group and classes in that group */
+    /** Set when role is teacher; primary grade group for progress segment */
     teacherGradeGroupId?: string | null;
+    /** All grade group IDs assigned to this teacher (for prizes and leaderboard) */
+    teacherGradeGroupIds?: string[];
   };
 }
 
@@ -49,10 +51,16 @@ export const authenticate = async (
       const teacherRepo = getTeacherRepository();
       const teacher = await teacherRepo.findOne({
         where: { id: decoded.id, deletedAt: IsNull() },
+        relations: ['gradeGroups'],
       });
       if (!teacher || teacher.status === 'inactive') {
         throw new AppError('Unauthorized - Teacher not found or inactive', 401);
       }
+      const gradeGroupIds = (teacher.gradeGroups?.map((g) => g.id) ?? []).length > 0
+        ? teacher.gradeGroups!.map((g) => g.id)
+        : teacher.gradeGroupId
+          ? [teacher.gradeGroupId]
+          : [];
       req.user = {
         id: teacher.id,
         email: teacher.email,
@@ -61,6 +69,7 @@ export const authenticate = async (
         name: teacher.name ?? null,
         teacherGrade: teacher.grade ?? null,
         teacherGradeGroupId: teacher.gradeGroupId ?? null,
+        teacherGradeGroupIds: gradeGroupIds,
       };
       return next();
     }
