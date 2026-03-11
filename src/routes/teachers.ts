@@ -1,12 +1,46 @@
 import { Router } from 'express';
-import { getTeacherRepository, getSchoolRepository, getClassTeacherRepository, getClassRepository, getGradeGroupRepository } from '../lib/repositories';
+import { getTeacherRepository, getSchoolRepository, getGradeGroupRepository, getPrizeRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { ensureSchoolAdminSchool } from '../middleware/validateSchoolAccess';
 import { validate } from '../middleware/validate';
 import { createTeacherSchema, updateTeacherSchema } from '../validations/teacher';
+import { addMinutesSchema } from '../validations/class';
 import { hashPassword } from '../lib/utils';
 import { IsNull, ILike, Not } from 'typeorm';
+import { Status as TeacherStatus } from '../entities/Teacher';
+
+const FALLBACK_STEP = 100;
+function getCumulativeThresholds(prizes: { minutesRequired: number }[]): number[] {
+  const out: number[] = [];
+  let sum = 0;
+  for (const p of prizes) {
+    sum += p.minutesRequired;
+    out.push(sum);
+  }
+  return out;
+}
+function getSegmentProgress(
+  fitnessMinutes: number,
+  earnedPrizesCount: number,
+  prizes: { minutesRequired: number }[]
+): { currentSegmentMinutes: number; minutesForNextPrize: number } {
+  if (!prizes.length) {
+    return { currentSegmentMinutes: fitnessMinutes % FALLBACK_STEP, minutesForNextPrize: FALLBACK_STEP };
+  }
+  const cumulative = getCumulativeThresholds(prizes);
+  const prevThreshold = earnedPrizesCount > 0 ? cumulative[earnedPrizesCount - 1] : 0;
+  const nextThreshold =
+    earnedPrizesCount < cumulative.length ? cumulative[earnedPrizesCount] : cumulative[cumulative.length - 1];
+  const segmentSize = nextThreshold - prevThreshold;
+  const inSegment = fitnessMinutes - prevThreshold;
+  const currentSegmentMinutes =
+    segmentSize > 0 ? Math.min(Math.max(0, inSegment), segmentSize) : fitnessMinutes % FALLBACK_STEP;
+  return {
+    currentSegmentMinutes,
+    minutesForNextPrize: segmentSize > 0 ? segmentSize : FALLBACK_STEP,
+  };
+}
 
 export const teacherRoutes = Router();
 
@@ -50,16 +84,10 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
       teacherRepo.count({ where }),
     ]);
 
-    const classTeacherRepo = getClassTeacherRepository();
-    const formattedTeachers = await Promise.all(
-      teachers.map(async (teacher) => {
-        const classTeachers = await classTeacherRepo.find({
-          where: { teacherId: teacher.id },
-        });
-        const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
-        return { ...rest, classIds: classTeachers.map((ct) => ct.classId) };
-      })
-    );
+    const formattedTeachers = teachers.map((teacher) => {
+      const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
+      return rest;
+    });
 
     res.json({
       data: formattedTeachers,
@@ -77,12 +105,141 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
   }
 });
 
+// Get current teacher's progress (fitness minutes + earned count by grade group prizes). Teacher-only.
+teacherRoutes.get('/me/progress', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    if (req.user?.role !== 'teacher') {
+      throw new AppError('Forbidden - Teachers only', 403);
+    }
+    const teacherRepo = getTeacherRepository();
+    const prizeRepo = getPrizeRepository();
+    const teacher = await teacherRepo.findOne({
+      where: { id: req.user!.id, deletedAt: IsNull() },
+      select: ['id', 'fitnessMinutes', 'earnedPrizesCount', 'gradeGroupId'],
+    });
+    if (!teacher) {
+      throw new AppError('Teacher not found', 404);
+    }
+    const totalMinutes = teacher.fitnessMinutes ?? 0;
+    const earnedPrizesCount = teacher.earnedPrizesCount ?? 0;
+    let prizes: { minutesRequired: number }[] = [];
+    if (teacher.gradeGroupId) {
+      const list = await prizeRepo.find({
+        where: { gradeGroupId: teacher.gradeGroupId, deletedAt: IsNull() },
+        order: { minutesRequired: 'ASC', createdAt: 'ASC' },
+        select: ['minutesRequired'],
+      });
+      prizes = list;
+    }
+    const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(totalMinutes, earnedPrizesCount, prizes);
+    res.json({
+      success: true,
+      data: {
+        fitnessMinutes: totalMinutes,
+        earnedPrizesCount,
+        currentSegmentMinutes,
+        minutesForNextPrize,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Add minutes for current teacher (grade-group flow). Teacher-only.
+teacherRoutes.post(
+  '/me/add-minutes',
+  authenticate,
+  validate(addMinutesSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      if (req.user?.role !== 'teacher') {
+        throw new AppError('Forbidden - Teachers only', 403);
+      }
+      const { minutes } = req.body;
+      const teacherRepo = getTeacherRepository();
+      const prizeRepo = getPrizeRepository();
+      const teacher = await teacherRepo.findOne({
+        where: { id: req.user!.id, deletedAt: IsNull() },
+      });
+      if (!teacher || !teacher.gradeGroupId) {
+        throw new AppError('Teacher or grade group not found', 404);
+      }
+      const newFitnessMinutes = (teacher.fitnessMinutes ?? 0) + minutes;
+      const prizes = await prizeRepo.find({
+        where: { gradeGroupId: teacher.gradeGroupId, deletedAt: IsNull() },
+        order: { minutesRequired: 'ASC', createdAt: 'ASC' },
+        select: ['id', 'minutesRequired'],
+      });
+      const cumulative = getCumulativeThresholds(prizes);
+      let newEarnedCount = 0;
+      for (let i = 0; i < cumulative.length; i++) {
+        if (newFitnessMinutes >= cumulative[i]) newEarnedCount = i + 1;
+      }
+      await teacherRepo.update(
+        { id: teacher.id },
+        { fitnessMinutes: newFitnessMinutes, earnedPrizesCount: newEarnedCount }
+      );
+      const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(newFitnessMinutes, newEarnedCount, prizes);
+      res.json({
+        success: true,
+        data: {
+          fitnessMinutes: newFitnessMinutes,
+          earnedPrizesCount: newEarnedCount,
+          currentSegmentMinutes,
+          minutesForNextPrize,
+        },
+        newEarnedPrizes: newEarnedCount - (teacher.earnedPrizesCount ?? 0),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Leaderboard: teachers in the same grade group as the current teacher (ordered by fitnessMinutes desc). Teacher-only.
+teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    if (req.user?.role !== 'teacher') {
+      throw new AppError('Forbidden - Teachers only', 403);
+    }
+    const teacherRepo = getTeacherRepository();
+    const current = await teacherRepo.findOne({
+      where: { id: req.user!.id, deletedAt: IsNull() },
+      select: ['id', 'gradeGroupId', 'schoolId'],
+    });
+    if (!current || !current.gradeGroupId || current.schoolId == null) {
+      return res.json({ data: [] });
+    }
+    const schoolId = current.schoolId as string;
+    const teachers = await teacherRepo.find({
+      where: {
+        gradeGroupId: current.gradeGroupId,
+        schoolId,
+        deletedAt: IsNull(),
+        status: TeacherStatus.ACTIVE,
+      },
+      select: ['id', 'name', 'grade', 'fitnessMinutes', 'earnedPrizesCount'],
+      order: { fitnessMinutes: 'DESC', earnedPrizesCount: 'DESC' },
+    });
+    const data = teachers.map((t) => ({
+      id: t.id,
+      name: t.name,
+      grade: t.grade ?? '',
+      fitnessMinutes: t.fitnessMinutes ?? 0,
+      earnedPrizesCount: t.earnedPrizesCount ?? 0,
+    }));
+    res.json({ data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get teacher by ID
 teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
   try {
     const { id } = req.params;
     const teacherRepo = getTeacherRepository();
-    const classTeacherRepo = getClassTeacherRepository();
 
     const teacher = await teacherRepo.findOne({
       where: {
@@ -95,12 +252,10 @@ teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
       throw new AppError('Teacher not found', 404);
     }
 
-    // Teachers can only fetch their own record (e.g. to refresh class assignments)
     if (req.user?.role === 'teacher' && req.user.id !== id) {
       throw new AppError('Forbidden - Access denied', 403);
     }
 
-    // School admins can see their school's teachers or unassigned teachers (to fetch by ID and assign)
     if (
       req.user?.role === 'school_admin' &&
       teacher.schoolId != null &&
@@ -109,13 +264,9 @@ teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
       throw new AppError('Forbidden - Access denied', 403);
     }
 
-    const classTeachers = await classTeacherRepo.find({
-      where: { teacherId: teacher.id },
-    });
     const { password: _pw, signupCode: _sc, phone: _p, ...rest } = teacher;
-
     res.json({
-      data: { ...rest, classIds: classTeachers.map((ct) => ct.classId) },
+      data: rest,
     });
   } catch (error) {
     next(error);
@@ -133,7 +284,6 @@ teacherRoutes.post(
       const { name, email, studentCount, schoolId, gradeGroupId, status } = req.body;
       const teacherRepo = getTeacherRepository();
       const schoolRepo = getSchoolRepository();
-      const classTeacherRepo = getClassTeacherRepository();
       const gradeGroupRepo = getGradeGroupRepository();
 
       const resolvedSchoolId = schoolId || req.user?.schoolId;
@@ -178,15 +328,11 @@ teacherRoutes.post(
         teacher.password = await hashPassword(req.body.password);
       }
       const savedTeacher = await teacherRepo.save(teacher);
-
-      const classTeachers = await classTeacherRepo.find({
-        where: { teacherId: savedTeacher.id },
-      });
       const { password: _pw, signupCode: _sc, phone: _p, ...teacherData } = savedTeacher;
 
       res.status(201).json({
         success: true,
-        data: { ...teacherData, classIds: classTeachers.map((ct) => ct.classId) },
+        data: teacherData,
       });
     } catch (error) {
       next(error);
@@ -205,8 +351,6 @@ teacherRoutes.put(
       const updateData: any = { ...req.body };
       delete updateData.phone; // not collected or displayed
       const teacherRepo = getTeacherRepository();
-      const classTeacherRepo = getClassTeacherRepository();
-      const classRepo = getClassRepository();
 
       // Get existing teacher
       const existing = await teacherRepo.findOne({
@@ -274,26 +418,16 @@ teacherRoutes.put(
         }
       }
 
-      // Clear class relationships when using grade-group flow (no classIds sent)
-      if (updateData.classIds !== undefined && Array.isArray(updateData.classIds) && updateData.classIds.length === 0) {
-        await classTeacherRepo.delete({ teacherId: id });
-        delete updateData.classIds;
-      } else if (updateData.classIds !== undefined) {
-        delete updateData.classIds;
-      }
+      if (updateData.classIds !== undefined) delete updateData.classIds;
 
       // Update teacher
       Object.assign(existing, updateData);
       const updatedTeacher = await teacherRepo.save(existing);
-
-      const classTeachers = await classTeacherRepo.find({
-        where: { teacherId: updatedTeacher.id },
-      });
       const { password: _pw2, signupCode: _sc2, phone: _p2, ...updatedData } = updatedTeacher;
 
       res.json({
         success: true,
-        data: { ...updatedData, classIds: classTeachers.map((ct) => ct.classId) },
+        data: updatedData,
       });
     } catch (error) {
       next(error);

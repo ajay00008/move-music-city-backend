@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getSchoolRepository, getTeacherRepository, getClassRepository, getEarnedPrizeRepository, getClassTeacherRepository, getUserRepository, getGradeGroupRepository, getPrizeRepository } from '../lib/repositories';
+import { getSchoolRepository, getTeacherRepository, getEarnedPrizeRepository, getUserRepository, getGradeGroupRepository, getPrizeRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { authenticate, requireSuperAdmin, AuthRequest } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -21,22 +21,6 @@ schoolRoutes.get('/list', async (req, res, next) => {
       order: { name: 'ASC' },
     });
     res.json({ data: schools });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Public: list classes by school (for teacher signup – no auth). Must be before /:id.
-schoolRoutes.get('/:schoolId/classes/list', async (req, res, next) => {
-  try {
-    const { schoolId } = req.params;
-    const classRepo = getClassRepository();
-    const classes = await classRepo.find({
-      where: { schoolId, deletedAt: IsNull() },
-      select: ['id', 'name', 'grade', 'section'],
-      order: { grade: 'ASC', name: 'ASC' },
-    });
-    res.json({ data: classes });
   } catch (error) {
     next(error);
   }
@@ -82,15 +66,12 @@ schoolRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
     ]);
 
     const teacherRepo = getTeacherRepository();
-    const classRepo = getClassRepository();
     const userRepo = getUserRepository();
 
     const schoolsWithCounts = await Promise.all(
       schools.map(async (school) => {
-        const [teacherCount, classCount, schoolAdmins] = await Promise.all([
+        const [teacherCount, schoolAdmins] = await Promise.all([
           teacherRepo.count({ where: { schoolId: school.id, deletedAt: IsNull() } }),
-          classRepo.count({ where: { schoolId: school.id, deletedAt: IsNull() } }),
-          // Use relation if loaded, else load users by schoolId (fallback)
           (school.admins?.length
             ? Promise.resolve(school.admins.filter((a: any) => !a.deletedAt))
             : userRepo.find({
@@ -108,7 +89,6 @@ schoolRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
         return {
           ...school,
           teacherCount,
-          classCount,
           adminId: primary?.id ?? null,
           adminEmail: primary?.email ?? school.email ?? null,
           admins: adminsList,
@@ -153,12 +133,9 @@ schoolRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
     }
 
     const teacherRepo = getTeacherRepository();
-    const classRepo = getClassRepository();
-
     const userRepo = getUserRepository();
-    const [teacherCount, classCount, schoolAdmins] = await Promise.all([
+    const [teacherCount, schoolAdmins] = await Promise.all([
       teacherRepo.count({ where: { schoolId: school.id, deletedAt: IsNull() } }),
-      classRepo.count({ where: { schoolId: school.id, deletedAt: IsNull() } }),
       school.admins?.length
         ? Promise.resolve(school.admins.filter((a: any) => !a.deletedAt))
         : userRepo.find({
@@ -177,7 +154,6 @@ schoolRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
       data: {
         ...school,
         teacherCount,
-        classCount,
         adminId: primary?.id ?? null,
         adminEmail: primary?.email ?? school.email ?? null,
         admins: adminsList,
@@ -247,7 +223,6 @@ schoolRoutes.post(
         data: {
           ...savedSchool,
           teacherCount: 0,
-          classCount: 0,
         },
         message: 'School created successfully. You can login with the school email and password.',
       });
@@ -328,19 +303,13 @@ schoolRoutes.put(
       }
 
       const teacherRepo = getTeacherRepository();
-      const classRepo = getClassRepository();
-
-      const [teacherCount, classCount] = await Promise.all([
-        teacherRepo.count({ where: { schoolId: updatedSchool.id, deletedAt: IsNull() } }),
-        classRepo.count({ where: { schoolId: updatedSchool.id, deletedAt: IsNull() } }),
-      ]);
+      const teacherCount = await teacherRepo.count({ where: { schoolId: updatedSchool.id, deletedAt: IsNull() } });
 
       res.json({
         success: true,
         data: {
           ...updatedSchool,
           teacherCount,
-          classCount,
         },
       });
     } catch (error) {
@@ -356,7 +325,6 @@ schoolRoutes.delete('/:id', authenticate, requireSuperAdmin, async (req, res, ne
     const schoolRepo = getSchoolRepository();
     const userRepo = getUserRepository();
     const teacherRepo = getTeacherRepository();
-    const classRepo = getClassRepository();
     const gradeGroupRepo = getGradeGroupRepository();
     const prizeRepo = getPrizeRepository();
     const earnedPrizeRepo = getEarnedPrizeRepository();
@@ -368,12 +336,10 @@ schoolRoutes.delete('/:id', authenticate, requireSuperAdmin, async (req, res, ne
 
     const now = new Date();
 
-    // Soft-delete all school-related data so nothing is left orphaned
     await Promise.all([
       earnedPrizeRepo.update({ schoolId: id }, { deletedAt: now }),
       prizeRepo.update({ schoolId: id }, { deletedAt: now }),
       gradeGroupRepo.update({ schoolId: id }, { deletedAt: now }),
-      classRepo.update({ schoolId: id }, { deletedAt: now }),
       teacherRepo.update({ schoolId: id }, { deletedAt: now }),
       userRepo.update({ schoolId: id }, { deletedAt: now }),
     ]);
@@ -395,76 +361,22 @@ schoolRoutes.get('/:schoolId/teachers', authenticate, async (req: AuthRequest, r
   try {
     const { schoolId } = req.params;
 
-    // Validate access
     if (req.user?.role === 'school_admin' && req.user.schoolId !== schoolId) {
       throw new AppError('Forbidden - Access denied', 403);
     }
 
     const teacherRepo = getTeacherRepository();
-    const classTeacherRepo = getClassTeacherRepository();
-
     const teachers = await teacherRepo.find({
-      where: {
-        schoolId,
-        deletedAt: IsNull(),
-      },
+      where: { schoolId, deletedAt: IsNull() },
       order: { createdAt: 'DESC' },
     });
 
-    const formattedTeachers = await Promise.all(
-      teachers.map(async (teacher) => {
-        const classTeachers = await classTeacherRepo.find({
-          where: { teacherId: teacher.id },
-        });
-
-        return {
-          ...teacher,
-          classIds: classTeachers.map((ct) => ct.classId),
-        };
-      })
-    );
+    const formattedTeachers = teachers.map((t) => {
+      const { password: _p, signupCode: _s, ...rest } = t;
+      return rest;
+    });
 
     res.json({ data: formattedTeachers });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// Get classes by school
-schoolRoutes.get('/:schoolId/classes', authenticate, async (req: AuthRequest, res, next) => {
-  try {
-    const { schoolId } = req.params;
-
-    // Validate access
-    if (req.user?.role === 'school_admin' && req.user.schoolId !== schoolId) {
-      throw new AppError('Forbidden - Access denied', 403);
-    }
-
-    const classRepo = getClassRepository();
-    const classTeacherRepo = getClassTeacherRepository();
-
-    const classes = await classRepo.find({
-      where: {
-        schoolId,
-        deletedAt: IsNull(),
-      },
-      order: { createdAt: 'DESC' },
-    });
-
-    const formattedClasses = await Promise.all(
-      classes.map(async (classItem) => {
-        const classTeachers = await classTeacherRepo.find({
-          where: { classId: classItem.id },
-        });
-
-        return {
-          ...classItem,
-          teacherIds: classTeachers.map((ct) => ct.teacherId),
-        };
-      })
-    );
-
-    res.json({ data: formattedClasses });
   } catch (error) {
     next(error);
   }

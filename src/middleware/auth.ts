@@ -14,6 +14,8 @@ export interface AuthRequest extends Request {
     name?: string | null;
     /** Set when role is teacher; used to filter prizes by grade group */
     teacherGrade?: string | null;
+    /** Set when role is teacher; used to show prizes for assigned grade group and classes in that group */
+    teacherGradeGroupId?: string | null;
   };
 }
 
@@ -58,6 +60,7 @@ export const authenticate = async (
         schoolId: teacher.schoolId,
         name: teacher.name ?? null,
         teacherGrade: teacher.grade ?? null,
+        teacherGradeGroupId: teacher.gradeGroupId ?? null,
       };
       return next();
     }

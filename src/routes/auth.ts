@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getUserRepository, getTeacherRepository, getSchoolRepository, getGradeGroupRepository, getClassRepository, getClassTeacherRepository } from '../lib/repositories';
+import { getUserRepository, getTeacherRepository, getSchoolRepository, getGradeGroupRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { hashPassword, comparePassword, generateToken } from '../lib/utils';
 import { validate } from '../middleware/validate';
@@ -13,8 +13,6 @@ import {
 } from '../validations/auth';
 import { IsNull } from 'typeorm';
 import { Status as TeacherStatus } from '../entities/Teacher';
-import { ClassTeacher } from '../entities/ClassTeacher';
-import { Class } from '../entities/Class';
 
 export const authRoutes = Router();
 
@@ -226,8 +224,6 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
     const { email, password } = req.body;
     const teacherRepo = getTeacherRepository();
     const schoolRepo = getSchoolRepository();
-    const classRepo = getClassRepository();
-    const classTeacherRepo = getClassTeacherRepository();
 
     const teacher = await teacherRepo.findOne({
       where: { email: email.toLowerCase(), deletedAt: IsNull() },
@@ -268,19 +264,6 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
       where: { id: teacher.schoolId },
     });
 
-    const classTeachers = await classTeacherRepo.find({
-      where: { teacherId: teacher.id },
-    });
-    const classIds = classTeachers.map((ct: ClassTeacher) => ct.classId);
-    const classes: Class[] = classIds.length
-      ? await classRepo.find({
-          where: classIds.map((id: string) => ({ id, deletedAt: IsNull() })),
-        })
-      : [];
-
-    const linkByClassId = new Map<string, ClassTeacher>(
-      classTeachers.map((ct: ClassTeacher) => [ct.classId, ct])
-    );
     res.json({
       success: true,
       token,
@@ -292,19 +275,8 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
         grade: teacher.grade,
         studentCount: teacher.studentCount,
         schoolId: teacher.schoolId,
-        classIds,
       },
-      classes: classes.map((c: Class) => {
-        const link = linkByClassId.get(c.id);
-        return {
-          id: c.id,
-          name: c.name,
-          grade: c.grade,
-          section: c.section,
-          studentCount: c.studentCount,
-          fitnessMinutes: link?.fitnessMinutes ?? 0,
-        };
-      }),
+      classes: [],
       school: school ? { id: school.id, name: school.name } : { id: teacher.schoolId, name: '' },
     });
   } catch (error) {

@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { getPrizeRepository, getGradeGroupRepository, getClassRepository, getClassTeacherRepository } from '../lib/repositories';
+import { getPrizeRepository, getGradeGroupRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { validate } from '../middleware/validate';
@@ -46,35 +46,11 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       where.schoolId = In([req.user.schoolId, null]);
     } else if (req.user?.role === 'teacher' && req.user.schoolId) {
       where.schoolId = In([req.user.schoolId, null]);
-      const schoolId = req.user.schoolId;
-
-      // When classId is provided: show only prizes from grade groups that contain this class (so switching class shows correct prizes)
-      if (classId && typeof classId === 'string') {
-        const classRepo = getClassRepository();
-        const classTeacherRepo = getClassTeacherRepository();
-        const classItem = await classRepo.findOne({
-          where: { id: classId, schoolId, deletedAt: IsNull() },
-        });
-        if (!classItem) {
-          return res.json({ data: [], pagination: { page: pageNum, limit: limitNum, total: 0, totalPages: 0, hasNext: false, hasPrev: false } });
-        }
-        const assigned = await classTeacherRepo.findOne({
-          where: { classId, teacherId: req.user!.id },
-        });
-        if (!assigned) {
-          return res.json({ data: [], pagination: { page: pageNum, limit: limitNum, total: 0, totalPages: 0, hasNext: false, hasPrev: false } });
-        }
-        const gradeGroupsWithClass = await gradeGroupRepo
-          .createQueryBuilder('gg')
-          .innerJoin('gg.classes', 'c', 'c.id = :classId', { classId })
-          .andWhere('(gg.schoolId = :schoolId OR gg.schoolId IS NULL)', { schoolId })
-          .andWhere('gg.deletedAt IS NULL')
-          .select(['gg.id'])
-          .getMany();
-        const matchingGradeGroupIds = gradeGroupsWithClass.map((gg) => gg.id);
-        where.gradeGroupId = matchingGradeGroupIds.length ? In(matchingGradeGroupIds) : In([]);
+      // Teachers: show only prizes for their assigned grade group (no class flow)
+      const teacherGradeGroupId = req.user.teacherGradeGroupId ?? null;
+      if (teacherGradeGroupId) {
+        where.gradeGroupId = teacherGradeGroupId;
       } else {
-        // No classId: fall back to teacher's grade (for backward compatibility / when no class selected)
         const teacherGrade = req.user.teacherGrade ?? null;
         if (teacherGrade) {
           const schoolGradeGroups = await gradeGroupRepo.find({

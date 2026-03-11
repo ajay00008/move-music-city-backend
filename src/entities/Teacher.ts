@@ -48,6 +48,14 @@ export class Teacher {
   @Column({ type: 'int', default: 0 })
   studentCount: number;
 
+  /** Teacher's own fitness minutes (when not using classes). Used for progress in the app. */
+  @Column({ type: 'int', default: 0 })
+  fitnessMinutes: number;
+
+  /** Number of prizes earned by this teacher (when not using classes). Derived from fitnessMinutes and grade group prizes. */
+  @Column({ type: 'int', default: 0 })
+  earnedPrizesCount: number;
+
   @Column({ type: 'uuid', nullable: true })
   @Index()
   schoolId: string | null;
