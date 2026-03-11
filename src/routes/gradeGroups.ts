@@ -32,21 +32,21 @@ gradeGroupRoutes.get('/list', async (req, res, next) => {
   }
 });
 
-// Get all grade groups
+// Get all grade groups (global list for school admin to pick when creating teachers)
 gradeGroupRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
     const gradeGroupRepo = getGradeGroupRepository();
-    
-    let where: any = {
-      deletedAt: IsNull(),
-    };
 
-    // School admins see only global grade groups (K-2, 3-5) set by super admin
-    if (req.user?.role === 'school_admin') {
-      where.schoolId = IsNull();
+    let where: any = { deletedAt: IsNull() };
+
+    // School admins see global grade groups + grade groups for their school
+    if (req.user?.role === 'school_admin' && req.user.schoolId) {
+      where = [
+        { deletedAt: IsNull(), schoolId: IsNull() },
+        { deletedAt: IsNull(), schoolId: req.user.schoolId },
+      ];
     }
-    // Super admin sees all (global and per-school)
-    // else: no extra filter
+    // Super admin sees all (no extra filter)
 
     const gradeGroups = await gradeGroupRepo.find({
       where,
@@ -291,17 +291,17 @@ gradeGroupRoutes.get('/:gradeGroupId/prizes', authenticate, async (req: AuthRequ
     const gradeGroupRepo = getGradeGroupRepository();
     const prizeRepo = getPrizeRepository();
 
-    let where: any = {
-      id: gradeGroupId,
-      deletedAt: IsNull(),
-    };
-
-    // School admins can only see their school's grade groups
+    let where: any = { id: gradeGroupId, deletedAt: IsNull() };
     if (req.user?.role === 'school_admin' && req.user.schoolId) {
-      where.schoolId = req.user.schoolId;
+      where = [
+        { id: gradeGroupId, deletedAt: IsNull(), schoolId: IsNull() },
+        { id: gradeGroupId, deletedAt: IsNull(), schoolId: req.user.schoolId },
+      ];
     }
 
-    const gradeGroup = await gradeGroupRepo.findOne({ where });
+    const gradeGroup = await gradeGroupRepo.findOne({
+      where: Array.isArray(where) ? where : [where],
+    });
 
     if (!gradeGroup) {
       throw new AppError('Grade group not found', 404);
