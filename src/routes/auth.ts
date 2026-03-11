@@ -227,6 +227,7 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
 
     const teacher = await teacherRepo.findOne({
       where: { email: email.toLowerCase(), deletedAt: IsNull() },
+      relations: ['gradeGroups'],
     });
 
     if (!teacher) {
@@ -264,6 +265,13 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
       where: { id: teacher.schoolId },
     });
 
+    // Grade groups assigned to this teacher (for dropdown + showing prizes per grade group)
+    const gradeGroupList = (teacher.gradeGroups ?? []).length > 0
+      ? teacher.gradeGroups!.map((gg) => ({ id: gg.id, name: gg.name, label: gg.label || gg.name }))
+      : teacher.gradeGroupId
+        ? [{ id: teacher.gradeGroupId, name: teacher.grade || 'My Grade', label: teacher.grade || 'My Grade' }]
+        : [];
+
     res.json({
       success: true,
       token,
@@ -275,8 +283,9 @@ authRoutes.post('/teacher/login', validate(teacherLoginSchema), async (req, res,
         grade: teacher.grade,
         studentCount: teacher.studentCount,
         schoolId: teacher.schoolId,
+        gradeGroupIds: gradeGroupList.map((gg) => gg.id),
       },
-      classes: [],
+      gradeGroups: gradeGroupList,
       school: school ? { id: school.id, name: school.name } : { id: teacher.schoolId, name: '' },
     });
   } catch (error) {

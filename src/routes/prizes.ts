@@ -41,12 +41,11 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       deletedAt: IsNull(),
     };
 
-    // School admins and teachers see global prizes (schoolId null) + their school's prizes; super_admin sees all
+    // School admins see global + their school's prizes; super_admin sees all
     if (req.user?.role === 'school_admin' && req.user.schoolId) {
       where.schoolId = In([req.user.schoolId, null]);
-    } else if (req.user?.role === 'teacher' && req.user.schoolId) {
-      where.schoolId = In([req.user.schoolId, null]);
-      // Teachers: show prizes for all their assigned grade groups
+    } else if (req.user?.role === 'teacher') {
+      // Teachers: show all prizes for their assigned grade groups (global grade groups = prizes can be any schoolId or null)
       const teacherGradeGroupIds = req.user.teacherGradeGroupIds ?? [];
       if (teacherGradeGroupIds.length > 0) {
         where.gradeGroupId = In(teacherGradeGroupIds);
@@ -56,20 +55,21 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
           where.gradeGroupId = teacherGradeGroupId;
         } else {
           const teacherGrade = req.user.teacherGrade ?? null;
-          if (teacherGrade) {
+          if (teacherGrade && req.user.schoolId) {
             const schoolGradeGroups = await gradeGroupRepo.find({
-              where: [{ schoolId: req.user!.schoolId!, deletedAt: IsNull() }, { schoolId: IsNull(), deletedAt: IsNull() }],
+              where: [{ schoolId: req.user.schoolId, deletedAt: IsNull() }, { schoolId: IsNull(), deletedAt: IsNull() }],
               select: ['id', 'grades'],
             });
             const matchingGradeGroupIds = schoolGradeGroups
               .filter((gg) => gradeGroupMatchesTeacher(gg, teacherGrade))
               .map((gg) => gg.id);
-            if (schoolGradeGroups.length > 0) {
-              where.gradeGroupId = In(matchingGradeGroupIds.length ? matchingGradeGroupIds : []);
-            }
+            where.gradeGroupId = In(matchingGradeGroupIds.length > 0 ? matchingGradeGroupIds : ['00000000-0000-0000-0000-000000000000']);
+          } else {
+            where.gradeGroupId = In(['00000000-0000-0000-0000-000000000000']);
           }
         }
       }
+      // Teachers see prizes for their grade groups only; no schoolId filter (global grade groups)
     } else if (req.user?.role !== 'super_admin') {
       where.schoolId = Not(IsNull());
     }
