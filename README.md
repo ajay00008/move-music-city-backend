@@ -77,9 +77,11 @@ After seeding:
 
 ## API Endpoints
 
-Base URL: `http://localhost:3000/api`
+Base URL: `http://localhost:3000`
 
-See `../swagger-api-spec.md` for complete API documentation.
+**Swagger UI (interactive API docs):** `http://localhost:3000/api-docs`
+
+See `../swagger-api-spec.md` for complete API documentation (if present).
 
 ## Development
 

@@ -16,6 +16,8 @@ import { earnedPrizeRoutes } from './routes/earnedPrizes';
 import { dashboardRoutes } from './routes/dashboard';
 import { createSocketServer } from './socket';
 import { setSocketIo } from './socket/emitter';
+import swaggerUi from 'swagger-ui-express';
+import { swaggerDocument } from './swagger';
 
 dotenv.config();
 
@@ -48,6 +50,9 @@ app.use(express.urlencoded({ extended: true }));
 app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
+
+// Swagger API docs
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 
 // API Routes
 app.use('/auth', authRoutes);
@@ -85,6 +90,7 @@ initializeDatabase()
     httpServer.listen(PORT, '0.0.0.0', () => {
       console.log(`🚀 Server running on http://localhost:${PORT}`);
       console.log(`📚 API available at http://localhost:${PORT}`);
+      console.log(`📖 Swagger docs at http://localhost:${PORT}/api-docs`);
       if (SOCKET_ENABLED) {
         console.log(`🔌 Real-time socket enabled at ws://localhost:${PORT}`);
       }
