@@ -127,16 +127,25 @@ const matches: Array<{ test: (req: Request) => boolean; match: Match }> = [
 export function teacherApiLogger(req: Request, res: Response, next: NextFunction) {
   if (!ENABLED) return next();
 
-  // Express `req.path` is sometimes relative to a mount when middleware is inside routers.
-  // This logger is mounted on the main app, but we still normalize to be safe.
+  // Express `req.path` can be relative / computed.
+  // Also, `req.path` is a getter-only property, so we must not assign to it.
   const pathOnly = (req.originalUrl || req.url || '')
     .toString()
     .split('?')[0]
     .split('#')[0];
 
-  const normalizedReq = Object.assign(req, { path: pathOnly });
+  // Minimal req-like object for matching and summaries.
+  const reqForMatch: any = {
+    path: pathOnly,
+    originalUrl: req.originalUrl,
+    url: req.url,
+    method: req.method,
+    query: req.query,
+    body: req.body,
+    headers: req.headers,
+  };
 
-  const match = matches.find((m) => m.test(normalizedReq))?.match;
+  const match = matches.find((m) => m.test(reqForMatch as Request))?.match;
   if (!match) return next();
 
   const reqIdHeader = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'] : undefined;
@@ -163,7 +172,7 @@ export function teacherApiLogger(req: Request, res: Response, next: NextFunction
   res.on('finish', () => {
     const ms = Date.now() - start;
     const status = res.statusCode;
-    const reqSummary = match.reqSummary ? match.reqSummary(req) : '';
+    const reqSummary = match.reqSummary ? match.reqSummary(reqForMatch as Request) : '';
 
     // Keep output short and stable. Example:
     // [TeacherAPI][a1b2c3] GET /prizes?... gradeGroupId=... -> 200 prizesCount=2 (34ms)
