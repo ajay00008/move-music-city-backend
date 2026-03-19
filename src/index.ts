@@ -18,6 +18,7 @@ import { createSocketServer } from './socket';
 import { setSocketIo } from './socket/emitter';
 import swaggerUi from 'swagger-ui-express';
 import { swaggerDocument } from './swagger';
+import { teacherApiLogger } from './middleware/teacherApiLogger';
 
 dotenv.config();
 
@@ -45,6 +46,8 @@ const corsOptions = {
 app.use(cors(corsOptions));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+// Optional minimal logs for teacher-related API debugging.
+app.use(teacherApiLogger);
 
 // Health check
 app.get('/health', (req, res) => {

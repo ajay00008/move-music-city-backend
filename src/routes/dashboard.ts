@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { getUserRepository, getSchoolRepository, getTeacherRepository } from '../lib/repositories';
 import { authenticate, AuthRequest } from '../middleware/auth';
+import { AppError } from '../middleware/errorHandler';
 import { IsNull } from 'typeorm';
 import { UserRole, Status } from '../entities/User';
 
@@ -46,7 +47,7 @@ dashboardRoutes.get('/stats', authenticate, async (req: AuthRequest, res, next) 
         activeTeachers,
       });
     } else {
-      throw new Error('Invalid user role or missing school ID');
+      throw new AppError('Invalid user role or missing school ID', 403);
     }
   } catch (error) {
     next(error);
