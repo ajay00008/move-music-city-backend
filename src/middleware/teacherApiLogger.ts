@@ -112,12 +112,31 @@ const matches: Array<{ test: (req: Request) => boolean; match: Match }> = [
       },
     },
   },
+  {
+    test: (req) => req.path === '/teachers/leaderboard',
+    match: {
+      key: 'teacher-leaderboard-compat',
+      resSummary: (body) => {
+        const count = Array.isArray(body?.data) ? body.data.length : 0;
+        return `leaderboardSize=${count}`;
+      },
+    },
+  },
 ];
 
 export function teacherApiLogger(req: Request, res: Response, next: NextFunction) {
   if (!ENABLED) return next();
 
-  const match = matches.find((m) => m.test(req))?.match;
+  // Express `req.path` is sometimes relative to a mount when middleware is inside routers.
+  // This logger is mounted on the main app, but we still normalize to be safe.
+  const pathOnly = (req.originalUrl || req.url || '')
+    .toString()
+    .split('?')[0]
+    .split('#')[0];
+
+  const normalizedReq = Object.assign(req, { path: pathOnly });
+
+  const match = matches.find((m) => m.test(normalizedReq))?.match;
   if (!match) return next();
 
   const reqIdHeader = typeof req.headers['x-request-id'] === 'string' ? req.headers['x-request-id'] : undefined;
@@ -148,7 +167,7 @@ export function teacherApiLogger(req: Request, res: Response, next: NextFunction
 
     // Keep output short and stable. Example:
     // [TeacherAPI][a1b2c3] GET /prizes?... gradeGroupId=... -> 200 prizesCount=2 (34ms)
-    const shortPath = req.originalUrl || req.url;
+    const shortPath = pathOnly;
     const safeReqSummary = reqSummary ? ` ${reqSummary}` : '';
     const safeResSummary = responseSummary ? ` ${responseSummary}` : '';
     console.log(

@@ -111,6 +111,70 @@ teacherRoutes.get('/', authenticate, ensureSchoolAdminSchool, async (req: AuthRe
   }
 });
 
+// Leaderboard compatibility:
+// Some clients may call `/teachers/leaderboard` instead of `/teachers/me/leaderboard`.
+// Provide this route so `/teachers/leaderboard` doesn't get matched by `/:id` (where `id="leaderboard"` causes a UUID cast error).
+teacherRoutes.get('/leaderboard', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    if (req.user?.role !== 'teacher') {
+      // Only teachers have a well-defined "my leaderboard" scope in the current app.
+      return res.json({ data: [] });
+    }
+
+    const teacherRepo = getTeacherRepository();
+    const current = await teacherRepo.findOne({
+      where: { id: req.user!.id, deletedAt: IsNull() },
+      relations: ['gradeGroups'],
+    });
+    if (!current || current.schoolId == null) {
+      return res.json({ data: [] });
+    }
+
+    const schoolId = current.schoolId as string;
+    const myGradeGroupIds =
+      (current.gradeGroups?.length ?? 0) > 0
+        ? current.gradeGroups!.map((g) => g.id)
+        : current.gradeGroupId
+          ? [current.gradeGroupId]
+          : [];
+
+    if (myGradeGroupIds.length === 0) {
+      return res.json({ data: [] });
+    }
+
+    const teachers = await teacherRepo
+      .createQueryBuilder('t')
+      .leftJoin('t.gradeGroups', 'gg')
+      .where('t.schoolId = :schoolId', { schoolId })
+      .andWhere('t.deletedAt IS NULL')
+      .andWhere('t.status = :status', { status: TeacherStatus.ACTIVE })
+      .andWhere('(t.gradeGroupId IN (:...ids) OR gg.id IN (:...ids))', { ids: myGradeGroupIds })
+      .select(['t.id', 't.name', 't.grade', 't.fitnessMinutes', 't.earnedPrizesCount'])
+      .orderBy('t.fitnessMinutes', 'DESC')
+      .addOrderBy('t.earnedPrizesCount', 'DESC')
+      .getMany();
+
+    const seen = new Set<string>();
+    const unique = teachers.filter((t) => {
+      if (seen.has(t.id)) return false;
+      seen.add(t.id);
+      return true;
+    });
+
+    const data = unique.map((t) => ({
+      id: t.id,
+      name: t.name,
+      grade: t.grade ?? '',
+      fitnessMinutes: t.fitnessMinutes ?? 0,
+      earnedPrizesCount: t.earnedPrizesCount ?? 0,
+    }));
+
+    res.json({ data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get current teacher's progress (fitness minutes + earned count by grade group prizes). Teacher-only.
 teacherRoutes.get('/me/progress', authenticate, async (req: AuthRequest, res, next) => {
   try {
