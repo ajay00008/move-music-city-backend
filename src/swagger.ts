@@ -641,6 +641,16 @@ export const swaggerDocument = {
         summary: 'Leaderboard for teachers in same grade groups (teacher only)',
         tags: ['Teachers'],
         security: [{ bearerAuth: [] }],
+        parameters: [
+          {
+            name: 'gradeGroupId',
+            in: 'query',
+            required: false,
+            schema: { type: 'string', format: 'uuid' },
+            description:
+              "If set, only teachers in this grade group (must be one of the current teacher's assigned groups). Omit to include all assigned groups.",
+          },
+        ],
         responses: {
           '200': {
             description: 'List of { id, name, grade, fitnessMinutes, earnedPrizesCount }',

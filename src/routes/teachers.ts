@@ -20,6 +20,27 @@ function getCumulativeThresholds(prizes: { minutesRequired: number }[]): number[
   }
   return out;
 }
+/** Optional ?gradeGroupId= — must be one of the teacher's assigned groups; otherwise all assigned groups. */
+function resolveLeaderboardGradeGroupFilter(
+  myGradeGroupIds: string[],
+  req: AuthRequest
+): { ok: true; ids: string[] } | { ok: false; message: string } {
+  const q = req.query.gradeGroupId;
+  const requested =
+    typeof q === 'string' && q.trim()
+      ? q.trim()
+      : Array.isArray(q) && typeof q[0] === 'string'
+        ? q[0].trim()
+        : undefined;
+  if (!requested) {
+    return { ok: true, ids: myGradeGroupIds };
+  }
+  if (!myGradeGroupIds.includes(requested)) {
+    return { ok: false, message: 'gradeGroupId is not assigned to this teacher' };
+  }
+  return { ok: true, ids: [requested] };
+}
+
 function getSegmentProgress(
   fitnessMinutes: number,
   earnedPrizesCount: number,
@@ -142,13 +163,19 @@ teacherRoutes.get('/leaderboard', authenticate, async (req: AuthRequest, res, ne
       return res.json({ data: [] });
     }
 
+    const resolved = resolveLeaderboardGradeGroupFilter(myGradeGroupIds, req);
+    if (!resolved.ok) {
+      return res.status(400).json({ error: resolved.message });
+    }
+    const filterIds = resolved.ids;
+
     const teachers = await teacherRepo
       .createQueryBuilder('t')
       .leftJoin('t.gradeGroups', 'gg')
       .where('t.schoolId = :schoolId', { schoolId })
       .andWhere('t.deletedAt IS NULL')
       .andWhere('t.status = :status', { status: TeacherStatus.ACTIVE })
-      .andWhere('(t.gradeGroupId IN (:...ids) OR gg.id IN (:...ids))', { ids: myGradeGroupIds })
+      .andWhere('(t.gradeGroupId IN (:...ids) OR gg.id IN (:...ids))', { ids: filterIds })
       .select(['t.id', 't.name', 't.grade', 't.fitnessMinutes', 't.earnedPrizesCount'])
       .orderBy('t.fitnessMinutes', 'DESC')
       .addOrderBy('t.earnedPrizesCount', 'DESC')
@@ -291,6 +318,11 @@ teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res,
     if (myGradeGroupIds.length === 0) {
       return res.json({ data: [] });
     }
+    const resolved = resolveLeaderboardGradeGroupFilter(myGradeGroupIds, req);
+    if (!resolved.ok) {
+      return res.status(400).json({ error: resolved.message });
+    }
+    const filterIds = resolved.ids;
     const teachers = await teacherRepo
       .createQueryBuilder('t')
       .leftJoin('t.gradeGroups', 'gg')
@@ -299,7 +331,7 @@ teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res,
       .andWhere('t.status = :status', { status: TeacherStatus.ACTIVE })
       .andWhere(
         '(t.gradeGroupId IN (:...ids) OR gg.id IN (:...ids))',
-        { ids: myGradeGroupIds }
+        { ids: filterIds }
       )
       .select(['t.id', 't.name', 't.grade', 't.fitnessMinutes', 't.earnedPrizesCount'])
       .orderBy('t.fitnessMinutes', 'DESC')
