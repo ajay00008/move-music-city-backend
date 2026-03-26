@@ -11,6 +11,60 @@ import { Status as SchoolStatus } from '../entities/School';
 
 export const schoolRoutes = Router();
 
+type TeacherForLookup = {
+  name: string;
+  schoolId: string | null;
+  gradeGroupId: string | null;
+  gradeGroups?: Array<{ id: string }>;
+};
+
+const getClassTeacherName = (classItem?: { teachers?: Array<{ teacher?: { name?: string | null } | null }> } | null) => {
+  return classItem?.teachers?.map((ct) => ct.teacher?.name?.trim()).find((name) => !!name) ?? null;
+};
+
+const buildTeacherNameIndex = (teachers: TeacherForLookup[]) => {
+  const index = new Map<string, Map<string, string>>();
+  for (const teacher of teachers) {
+    const schoolId = teacher.schoolId;
+    const teacherName = teacher.name?.trim();
+    if (!schoolId || !teacherName) continue;
+    const gradeGroupIds = new Set<string>();
+    if (teacher.gradeGroupId) {
+      gradeGroupIds.add(teacher.gradeGroupId);
+    }
+    for (const gg of teacher.gradeGroups ?? []) {
+      if (gg.id) gradeGroupIds.add(gg.id);
+    }
+    if (gradeGroupIds.size === 0) continue;
+    if (!index.has(schoolId)) {
+      index.set(schoolId, new Map<string, string>());
+    }
+    const schoolIndex = index.get(schoolId)!;
+    for (const gradeGroupId of gradeGroupIds) {
+      if (!schoolIndex.has(gradeGroupId)) {
+        schoolIndex.set(gradeGroupId, teacherName);
+      }
+    }
+  }
+  return index;
+};
+
+const resolveTeacherName = (
+  schoolId: string | null | undefined,
+  gradeGroupId: string | undefined,
+  teacherNameFromRow: string | null | undefined,
+  classItem: { teachers?: Array<{ teacher?: { name?: string | null } | null }> } | null | undefined,
+  teacherIndex: Map<string, Map<string, string>>
+) => {
+  if (teacherNameFromRow?.trim()) return teacherNameFromRow.trim();
+  if (schoolId && gradeGroupId) {
+    const schoolIndex = teacherIndex.get(schoolId);
+    const gradeGroupTeacherName = schoolIndex?.get(gradeGroupId);
+    if (gradeGroupTeacherName) return gradeGroupTeacherName;
+  }
+  return getClassTeacherName(classItem);
+};
+
 // Public: list school names and ids (for teacher signup dropdown)
 schoolRoutes.get('/list', async (req, res, next) => {
   try {
@@ -406,20 +460,27 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
 
     const earnedPrizes = await earnedPrizeRepo.find({
       where,
-      relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
+      relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
       order: { earnedAt: 'DESC' },
     });
+    const teacherRepo = getTeacherRepository();
+    const teachers = await teacherRepo.find({
+      where: { schoolId, deletedAt: IsNull() },
+      relations: ['gradeGroups'],
+      select: ['id', 'name', 'schoolId', 'gradeGroupId'],
+    });
+    const teacherIndex = buildTeacherNameIndex(teachers as TeacherForLookup[]);
 
     const formatted = earnedPrizes.map((ep) => {
-      const firstTeacher = ep.class?.teachers?.[0]?.teacher;
+      const schoolIdForRow = ep.schoolId ?? ep.class?.schoolId ?? schoolId;
       return {
         id: ep.id,
         prizeId: ep.prizeId,
         classId: ep.classId,
-        className: ep.class.name,
-        teacherName: firstTeacher?.name ?? null,
+        className: ep.class?.name ?? '—',
+        teacherName: resolveTeacherName(schoolIdForRow, ep.prize?.gradeGroupId, ep.teacher?.name, ep.class, teacherIndex),
         studentCount: ep.class?.studentCount ?? 0,
-        schoolId: ep.schoolId,
+        schoolId: schoolIdForRow,
         earnedAt: ep.earnedAt.toISOString().split('T')[0],
         delivered: ep.delivered,
       };

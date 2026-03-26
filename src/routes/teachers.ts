@@ -1,14 +1,22 @@
 import { Router } from 'express';
-import { getTeacherRepository, getSchoolRepository, getGradeGroupRepository, getPrizeRepository } from '../lib/repositories';
+import { getTeacherRepository, getSchoolRepository, getGradeGroupRepository, getPrizeRepository, getEarnedPrizeRepository } from '../lib/repositories';
 import { AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { ensureSchoolAdminSchool } from '../middleware/validateSchoolAccess';
 import { validate } from '../middleware/validate';
-import { createTeacherSchema, updateTeacherSchema } from '../validations/teacher';
+import {
+  createTeacherSchema,
+  updateTeacherSchema,
+  updateTeacherProfileSchema,
+  changeTeacherPasswordSchema,
+  teacherProfileImageUploadUrlSchema,
+} from '../validations/teacher';
 import { addMinutesSchema } from '../validations/class';
-import { hashPassword } from '../lib/utils';
+import { comparePassword, hashPassword } from '../lib/utils';
 import { IsNull, ILike, Not, In } from 'typeorm';
 import { Status as TeacherStatus } from '../entities/Teacher';
+import { emitSchoolPrizeEarned } from '../socket/emitter';
+import { createTeacherProfileImageUploadUrl } from '../lib/s3';
 
 const FALLBACK_STEP = 100;
 function getCumulativeThresholds(prizes: { minutesRequired: number }[]): number[] {
@@ -256,6 +264,7 @@ teacherRoutes.post(
       const { minutes } = req.body;
       const teacherRepo = getTeacherRepository();
       const prizeRepo = getPrizeRepository();
+      const earnedPrizeRepo = getEarnedPrizeRepository();
       const teacher = await teacherRepo.findOne({
         where: { id: req.user!.id, deletedAt: IsNull() },
       });
@@ -269,6 +278,7 @@ teacherRoutes.post(
         select: ['id', 'minutesRequired'],
       });
       const cumulative = getCumulativeThresholds(prizes);
+      const previousEarnedCount = teacher.earnedPrizesCount ?? 0;
       let newEarnedCount = 0;
       for (let i = 0; i < cumulative.length; i++) {
         if (newFitnessMinutes >= cumulative[i]) newEarnedCount = i + 1;
@@ -277,6 +287,30 @@ teacherRoutes.post(
         { id: teacher.id },
         { fitnessMinutes: newFitnessMinutes, earnedPrizesCount: newEarnedCount }
       );
+      if (newEarnedCount > previousEarnedCount && teacher.schoolId) {
+        const newlyEarned = prizes.slice(previousEarnedCount, newEarnedCount);
+        if (newlyEarned.length > 0) {
+          const rows = newlyEarned.map((p) =>
+            earnedPrizeRepo.create({
+              prizeId: p.id,
+              classId: null,
+              teacherId: teacher.id,
+              schoolId: teacher.schoolId!,
+              delivered: false,
+            })
+          );
+          await earnedPrizeRepo.save(rows);
+          emitSchoolPrizeEarned({
+            schoolId: teacher.schoolId,
+            teacherId: teacher.id,
+            teacherName: teacher.name,
+            gradeGroupId: teacher.gradeGroupId,
+            prizeId: newlyEarned[newlyEarned.length - 1]?.id ?? null,
+            earnedPrizesCount: newEarnedCount,
+            newEarnedPrizes: newEarnedCount - previousEarnedCount,
+          });
+        }
+      }
       const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(newFitnessMinutes, newEarnedCount, prizes);
       res.json({
         success: true,
@@ -286,7 +320,7 @@ teacherRoutes.post(
           currentSegmentMinutes,
           minutesForNextPrize,
         },
-        newEarnedPrizes: newEarnedCount - (teacher.earnedPrizesCount ?? 0),
+        newEarnedPrizes: newEarnedCount - previousEarnedCount,
       });
     } catch (error) {
       next(error);
@@ -355,6 +389,124 @@ teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res,
     next(error);
   }
 });
+
+// Get current teacher profile (teacher-only)
+teacherRoutes.get('/me/profile', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    if (req.user?.role !== 'teacher') {
+      throw new AppError('Forbidden - Teachers only', 403);
+    }
+    const teacherRepo = getTeacherRepository();
+    const teacher = await teacherRepo.findOne({
+      where: { id: req.user.id, deletedAt: IsNull() },
+      relations: ['gradeGroups'],
+    });
+    if (!teacher) {
+      throw new AppError('Teacher not found', 404);
+    }
+    const { password: _pw, signupCode: _sc, ...safe } = teacher;
+    const gradeGroupIds = (teacher.gradeGroups ?? []).length > 0
+      ? teacher.gradeGroups.map((g) => g.id)
+      : teacher.gradeGroupId
+        ? [teacher.gradeGroupId]
+        : [];
+    res.json({ data: { ...safe, gradeGroupIds } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Update current teacher profile (teacher-only)
+teacherRoutes.patch(
+  '/me/profile',
+  authenticate,
+  validate(updateTeacherProfileSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      if (req.user?.role !== 'teacher') {
+        throw new AppError('Forbidden - Teachers only', 403);
+      }
+      const teacherRepo = getTeacherRepository();
+      const teacher = await teacherRepo.findOne({
+        where: { id: req.user.id, deletedAt: IsNull() },
+      });
+      if (!teacher) {
+        throw new AppError('Teacher not found', 404);
+      }
+      if (typeof req.body.name === 'string') {
+        teacher.name = req.body.name.trim();
+      }
+      if (req.body.profileImageUrl !== undefined) {
+        teacher.profileImageUrl = req.body.profileImageUrl;
+      }
+      const updated = await teacherRepo.save(teacher);
+      const { password: _pw, signupCode: _sc, ...safe } = updated;
+      res.json({ success: true, data: safe });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Change current teacher password (requires old password)
+teacherRoutes.post(
+  '/me/change-password',
+  authenticate,
+  validate(changeTeacherPasswordSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      if (req.user?.role !== 'teacher') {
+        throw new AppError('Forbidden - Teachers only', 403);
+      }
+      const { oldPassword, newPassword } = req.body;
+      const teacherRepo = getTeacherRepository();
+      const teacher = await teacherRepo.findOne({
+        where: { id: req.user.id, deletedAt: IsNull() },
+      });
+      if (!teacher) {
+        throw new AppError('Teacher not found', 404);
+      }
+      if (!teacher.password) {
+        throw new AppError('Password is not set for this account', 400);
+      }
+      const isOldPasswordValid = await comparePassword(oldPassword, teacher.password);
+      if (!isOldPasswordValid) {
+        throw new AppError('Old password is incorrect', 400);
+      }
+      teacher.password = await hashPassword(newPassword);
+      await teacherRepo.save(teacher);
+      res.json({ success: true, message: 'Password changed successfully' });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Create presigned URL for teacher profile image upload
+teacherRoutes.post(
+  '/me/profile-image/upload-url',
+  authenticate,
+  validate(teacherProfileImageUploadUrlSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      if (req.user?.role !== 'teacher') {
+        throw new AppError('Forbidden - Teachers only', 403);
+      }
+      const { contentType, extension } = req.body;
+      const { uploadUrl, fileUrl, key } = await createTeacherProfileImageUploadUrl({
+        teacherId: req.user.id,
+        contentType,
+        extension,
+      });
+      res.json({
+        success: true,
+        data: { uploadUrl, fileUrl, key },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
 
 // Get teacher by ID
 teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {

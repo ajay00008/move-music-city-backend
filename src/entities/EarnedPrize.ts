@@ -11,6 +11,7 @@ import {
 } from 'typeorm';
 import { Prize } from './Prize';
 import { Class } from './Class';
+import { Teacher } from './Teacher';
 
 @Entity('earned_prizes')
 export class EarnedPrize {
@@ -21,9 +22,13 @@ export class EarnedPrize {
   @Index()
   prizeId: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'uuid', nullable: true })
   @Index()
-  classId: string;
+  classId: string | null;
+
+  @Column({ type: 'uuid', nullable: true })
+  @Index()
+  teacherId: string | null;
 
   @Column({ type: 'uuid' })
   @Index()
@@ -48,7 +53,11 @@ export class EarnedPrize {
   @JoinColumn({ name: 'prizeId' })
   prize: Prize;
 
-  @ManyToOne(() => Class, (classItem) => classItem.earnedPrizes)
+  @ManyToOne(() => Class, (classItem) => classItem.earnedPrizes, { nullable: true })
   @JoinColumn({ name: 'classId' })
-  class: Class;
+  class: Class | null;
+
+  @ManyToOne(() => Teacher, { nullable: true })
+  @JoinColumn({ name: 'teacherId' })
+  teacher: Teacher | null;
 }

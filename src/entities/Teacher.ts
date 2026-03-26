@@ -39,6 +39,9 @@ export class Teacher {
   @Column({ type: 'varchar', default: '' })
   phone: string;
 
+  @Column({ type: 'varchar', nullable: true })
+  profileImageUrl: string | null;
+
   /** Unique 4-digit code for app signups; school uses this to find and assign the teacher. Null for admin-created teachers. */
   @Column({ type: 'varchar', length: 4, nullable: true, unique: true })
   @Index({ unique: true })

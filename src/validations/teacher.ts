@@ -27,3 +27,18 @@ export const updateTeacherSchema = z.object({
   status: z.enum(['active', 'inactive']).optional(),
   password: z.string().min(6, 'Password must be at least 6 characters').optional().nullable(),
 });
+
+export const updateTeacherProfileSchema = z.object({
+  name: z.string().min(1, 'Name is required').optional(),
+  profileImageUrl: z.string().url('Invalid profile image URL').nullable().optional(),
+});
+
+export const changeTeacherPasswordSchema = z.object({
+  oldPassword: z.string().min(1, 'Old password is required'),
+  newPassword: z.string().min(6, 'New password must be at least 6 characters'),
+});
+
+export const teacherProfileImageUploadUrlSchema = z.object({
+  contentType: z.string().min(1, 'contentType is required'),
+  extension: z.string().min(1).max(8).optional(),
+});

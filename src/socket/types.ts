@@ -26,8 +26,12 @@ export type ClassMinutesUpdatedPayload = {
 
 export type SchoolPrizeEarnedPayload = {
   schoolId: string;
-  classId: string;
-  className: string;
+  classId?: string | null;
+  className?: string | null;
+  teacherId?: string | null;
+  teacherName?: string | null;
+  gradeGroupId?: string | null;
+  prizeId?: string | null;
   earnedPrizesCount: number;
   newEarnedPrizes: number;
 };

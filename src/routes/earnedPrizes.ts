@@ -1,13 +1,67 @@
 import { Router } from 'express';
-import { getEarnedPrizeRepository } from '../lib/repositories';
+import { getEarnedPrizeRepository, getTeacherRepository } from '../lib/repositories';
 import { emitSchoolPrizeDelivered } from '../socket/emitter';
 import { AppError } from '../middleware/errorHandler';
 import { authenticate, AuthRequest } from '../middleware/auth';
 import { validate } from '../middleware/validate';
 import { markPrizeDeliveredSchema } from '../validations/prize';
-import { IsNull } from 'typeorm';
+import { In, IsNull } from 'typeorm';
 
 export const earnedPrizeRoutes = Router();
+
+type TeacherForLookup = {
+  name: string;
+  schoolId: string | null;
+  gradeGroupId: string | null;
+  gradeGroups?: Array<{ id: string }>;
+};
+
+const getClassTeacherName = (classItem?: { teachers?: Array<{ teacher?: { name?: string | null } | null }> } | null) => {
+  return classItem?.teachers?.map((ct) => ct.teacher?.name?.trim()).find((name) => !!name) ?? null;
+};
+
+const buildTeacherNameIndex = (teachers: TeacherForLookup[]) => {
+  const index = new Map<string, Map<string, string>>();
+  for (const teacher of teachers) {
+    const schoolId = teacher.schoolId;
+    const teacherName = teacher.name?.trim();
+    if (!schoolId || !teacherName) continue;
+    const gradeGroupIds = new Set<string>();
+    if (teacher.gradeGroupId) {
+      gradeGroupIds.add(teacher.gradeGroupId);
+    }
+    for (const gg of teacher.gradeGroups ?? []) {
+      if (gg.id) gradeGroupIds.add(gg.id);
+    }
+    if (gradeGroupIds.size === 0) continue;
+    if (!index.has(schoolId)) {
+      index.set(schoolId, new Map<string, string>());
+    }
+    const schoolIndex = index.get(schoolId)!;
+    for (const gradeGroupId of gradeGroupIds) {
+      if (!schoolIndex.has(gradeGroupId)) {
+        schoolIndex.set(gradeGroupId, teacherName);
+      }
+    }
+  }
+  return index;
+};
+
+const resolveTeacherName = (
+  schoolId: string | null | undefined,
+  gradeGroupId: string | undefined,
+  teacherNameFromRow: string | null | undefined,
+  classItem: { teachers?: Array<{ teacher?: { name?: string | null } | null }> } | null | undefined,
+  teacherIndex: Map<string, Map<string, string>>
+) => {
+  if (teacherNameFromRow?.trim()) return teacherNameFromRow.trim();
+  if (schoolId && gradeGroupId) {
+    const schoolIndex = teacherIndex.get(schoolId);
+    const gradeGroupTeacherName = schoolIndex?.get(gradeGroupId);
+    if (gradeGroupTeacherName) return gradeGroupTeacherName;
+  }
+  return getClassTeacherName(classItem);
+};
 
 // Get all earned prizes
 earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
@@ -53,22 +107,39 @@ earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => 
         where,
         skip: (pageNum - 1) * limitNum,
         take: limitNum,
-        relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
+        relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
         order: { earnedAt: 'DESC' },
       }),
       earnedPrizeRepo.count({ where }),
     ]);
 
+    const teacherRepo = getTeacherRepository();
+    const schoolIds = Array.from(
+      new Set(earnedPrizes.map((ep) => ep.schoolId ?? ep.class?.schoolId).filter((id): id is string => !!id))
+    );
+    const teachers =
+      schoolIds.length > 0
+        ? await teacherRepo.find({
+            where: {
+              schoolId: schoolIds.length === 1 ? schoolIds[0] : In(schoolIds),
+              deletedAt: IsNull(),
+            } as any,
+            relations: ['gradeGroups'],
+            select: ['id', 'name', 'schoolId', 'gradeGroupId'],
+          })
+        : [];
+    const teacherIndex = buildTeacherNameIndex(teachers as TeacherForLookup[]);
+
     const formatted = earnedPrizes.map((ep) => {
-      const firstTeacher = ep.class?.teachers?.[0]?.teacher;
+      const schoolIdForRow = ep.schoolId ?? ep.class?.schoolId ?? null;
       return {
         id: ep.id,
         prizeId: ep.prizeId,
         classId: ep.classId,
-        className: ep.class.name,
-        teacherName: firstTeacher?.name ?? null,
+        className: ep.class?.name ?? '—',
+        teacherName: resolveTeacherName(schoolIdForRow, ep.prize?.gradeGroupId, ep.teacher?.name, ep.class, teacherIndex),
         studentCount: ep.class?.studentCount ?? 0,
-        schoolId: ep.schoolId ?? ep.class?.schoolId,
+        schoolId: schoolIdForRow,
         earnedAt: ep.earnedAt.toISOString().split('T')[0],
         delivered: ep.delivered,
       };
@@ -101,7 +172,7 @@ earnedPrizeRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) 
         id,
         deletedAt: IsNull(),
       },
-      relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
+      relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
     });
 
     if (!earnedPrize) {
@@ -116,15 +187,26 @@ earnedPrizeRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) 
       }
     }
 
-    const firstTeacher = earnedPrize.class?.teachers?.[0]?.teacher;
+    const teacherRepo = getTeacherRepository();
+    const schoolIdForRow = earnedPrize.schoolId ?? earnedPrize.class?.schoolId ?? null;
+    const teachers =
+      schoolIdForRow != null
+        ? await teacherRepo.find({
+            where: { schoolId: schoolIdForRow, deletedAt: IsNull() },
+            relations: ['gradeGroups'],
+            select: ['id', 'name', 'schoolId', 'gradeGroupId'],
+          })
+        : [];
+    const teacherIndex = buildTeacherNameIndex(teachers as TeacherForLookup[]);
+
     const formatted = {
       id: earnedPrize.id,
       prizeId: earnedPrize.prizeId,
       classId: earnedPrize.classId,
-      className: earnedPrize.class.name,
-      teacherName: firstTeacher?.name ?? null,
+      className: earnedPrize.class?.name ?? '—',
+      teacherName: resolveTeacherName(schoolIdForRow, earnedPrize.prize?.gradeGroupId, earnedPrize.teacher?.name, earnedPrize.class, teacherIndex),
       studentCount: earnedPrize.class?.studentCount ?? 0,
-      schoolId: earnedPrize.schoolId,
+      schoolId: schoolIdForRow,
       earnedAt: earnedPrize.earnedAt.toISOString().split('T')[0],
       delivered: earnedPrize.delivered,
     };
@@ -151,7 +233,7 @@ earnedPrizeRoutes.patch(
           id,
           deletedAt: IsNull(),
         },
-        relations: ['class'],
+        relations: ['class', 'teacher'],
       });
 
       if (!earnedPrize) {
@@ -159,7 +241,8 @@ earnedPrizeRoutes.patch(
       }
 
       // School admins can only update their school's earned prizes
-      if (req.user?.role === 'school_admin' && req.user.schoolId !== earnedPrize.schoolId) {
+      const schoolIdForAccess = earnedPrize.schoolId ?? earnedPrize.class?.schoolId ?? earnedPrize.teacher?.schoolId ?? null;
+      if (req.user?.role === 'school_admin' && req.user.schoolId !== schoolIdForAccess) {
         throw new AppError('Forbidden - Access denied', 403);
       }
 
@@ -168,23 +251,39 @@ earnedPrizeRoutes.patch(
 
       const updatedWithRelations = await earnedPrizeRepo.findOne({
         where: { id },
-        relations: ['prize', 'class', 'class.teachers', 'class.teachers.teacher'],
+        relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
       });
-      const firstTeacher = updatedWithRelations?.class?.teachers?.[0]?.teacher;
+      const teacherRepo = getTeacherRepository();
+      const schoolIdForRow = updated.schoolId ?? updatedWithRelations?.class?.schoolId ?? null;
+      const teachers =
+        schoolIdForRow != null
+          ? await teacherRepo.find({
+              where: { schoolId: schoolIdForRow, deletedAt: IsNull() },
+              relations: ['gradeGroups'],
+              select: ['id', 'name', 'schoolId', 'gradeGroupId'],
+            })
+          : [];
+      const teacherIndex = buildTeacherNameIndex(teachers as TeacherForLookup[]);
       const formatted = {
         id: updated.id,
         prizeId: updated.prizeId,
         classId: updated.classId,
-        className: updatedWithRelations?.class.name || '',
-        teacherName: firstTeacher?.name ?? null,
+        className: updatedWithRelations?.class?.name || '—',
+        teacherName: resolveTeacherName(
+          schoolIdForRow,
+          updatedWithRelations?.prize?.gradeGroupId,
+          updatedWithRelations?.teacher?.name,
+          updatedWithRelations?.class,
+          teacherIndex
+        ),
         studentCount: updatedWithRelations?.class?.studentCount ?? 0,
-        schoolId: updated.schoolId ?? updatedWithRelations?.class?.schoolId ?? null,
+        schoolId: schoolIdForRow,
         earnedAt: updated.earnedAt.toISOString().split('T')[0],
         delivered: updated.delivered,
       };
 
       emitSchoolPrizeDelivered({
-        schoolId: updated.schoolId ?? updatedWithRelations?.class?.schoolId,
+        schoolId: updated.schoolId ?? updatedWithRelations?.class?.schoolId ?? updatedWithRelations?.teacher?.schoolId ?? '',
         earnedPrizeId: updated.id,
         delivered: updated.delivered,
       });
