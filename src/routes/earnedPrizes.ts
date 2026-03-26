@@ -107,7 +107,7 @@ earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => 
         where,
         skip: (pageNum - 1) * limitNum,
         take: limitNum,
-        relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
+        relations: ['prize', 'prize.gradeGroup', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
         order: { earnedAt: 'DESC' },
       }),
       earnedPrizeRepo.count({ where }),
@@ -137,6 +137,8 @@ earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => 
         prizeId: ep.prizeId,
         classId: ep.classId,
         className: ep.class?.name ?? '—',
+        gradeGroupId: ep.prize?.gradeGroupId ?? null,
+        gradeGroupName: ep.prize?.gradeGroup?.label || ep.prize?.gradeGroup?.name || '—',
         teacherName: resolveTeacherName(schoolIdForRow, ep.prize?.gradeGroupId, ep.teacher?.name, ep.class, teacherIndex),
         studentCount: ep.class?.studentCount ?? 0,
         schoolId: schoolIdForRow,
@@ -172,7 +174,7 @@ earnedPrizeRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) 
         id,
         deletedAt: IsNull(),
       },
-      relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
+      relations: ['prize', 'prize.gradeGroup', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
     });
 
     if (!earnedPrize) {
@@ -204,6 +206,8 @@ earnedPrizeRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) 
       prizeId: earnedPrize.prizeId,
       classId: earnedPrize.classId,
       className: earnedPrize.class?.name ?? '—',
+      gradeGroupId: earnedPrize.prize?.gradeGroupId ?? null,
+      gradeGroupName: earnedPrize.prize?.gradeGroup?.label || earnedPrize.prize?.gradeGroup?.name || '—',
       teacherName: resolveTeacherName(schoolIdForRow, earnedPrize.prize?.gradeGroupId, earnedPrize.teacher?.name, earnedPrize.class, teacherIndex),
       studentCount: earnedPrize.class?.studentCount ?? 0,
       schoolId: schoolIdForRow,
@@ -251,7 +255,7 @@ earnedPrizeRoutes.patch(
 
       const updatedWithRelations = await earnedPrizeRepo.findOne({
         where: { id },
-        relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
+        relations: ['prize', 'prize.gradeGroup', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
       });
       const teacherRepo = getTeacherRepository();
       const schoolIdForRow = updated.schoolId ?? updatedWithRelations?.class?.schoolId ?? null;
@@ -269,6 +273,11 @@ earnedPrizeRoutes.patch(
         prizeId: updated.prizeId,
         classId: updated.classId,
         className: updatedWithRelations?.class?.name || '—',
+        gradeGroupId: updatedWithRelations?.prize?.gradeGroupId ?? null,
+        gradeGroupName:
+          updatedWithRelations?.prize?.gradeGroup?.label ||
+          updatedWithRelations?.prize?.gradeGroup?.name ||
+          '—',
         teacherName: resolveTeacherName(
           schoolIdForRow,
           updatedWithRelations?.prize?.gradeGroupId,

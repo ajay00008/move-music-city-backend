@@ -460,7 +460,7 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
 
     const earnedPrizes = await earnedPrizeRepo.find({
       where,
-      relations: ['prize', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
+      relations: ['prize', 'prize.gradeGroup', 'teacher', 'class', 'class.teachers', 'class.teachers.teacher'],
       order: { earnedAt: 'DESC' },
     });
     const teacherRepo = getTeacherRepository();
@@ -478,6 +478,8 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
         prizeId: ep.prizeId,
         classId: ep.classId,
         className: ep.class?.name ?? '—',
+        gradeGroupId: ep.prize?.gradeGroupId ?? null,
+        gradeGroupName: ep.prize?.gradeGroup?.label || ep.prize?.gradeGroup?.name || '—',
         teacherName: resolveTeacherName(schoolIdForRow, ep.prize?.gradeGroupId, ep.teacher?.name, ep.class, teacherIndex),
         studentCount: ep.class?.studentCount ?? 0,
         schoolId: schoolIdForRow,

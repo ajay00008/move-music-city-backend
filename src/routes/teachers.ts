@@ -328,6 +328,42 @@ teacherRoutes.post(
   }
 );
 
+// Reset current teacher progress (minutes + earned prizes count + earned prize rows)
+teacherRoutes.post('/me/reset-progress', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    if (req.user?.role !== 'teacher') {
+      throw new AppError('Forbidden - Teachers only', 403);
+    }
+    const teacherRepo = getTeacherRepository();
+    const earnedPrizeRepo = getEarnedPrizeRepository();
+    const teacher = await teacherRepo.findOne({
+      where: { id: req.user.id, deletedAt: IsNull() },
+    });
+    if (!teacher) {
+      throw new AppError('Teacher not found', 404);
+    }
+    teacher.fitnessMinutes = 0;
+    teacher.earnedPrizesCount = 0;
+    await teacherRepo.save(teacher);
+    await earnedPrizeRepo.update(
+      { teacherId: teacher.id, deletedAt: IsNull() },
+      { deletedAt: new Date() }
+    );
+    res.json({
+      success: true,
+      message: 'Progress reset successfully',
+      data: {
+        fitnessMinutes: 0,
+        earnedPrizesCount: 0,
+        currentSegmentMinutes: 0,
+        minutesForNextPrize: FALLBACK_STEP,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Leaderboard: teachers who share at least one grade group with the current teacher (same school). Teacher-only.
 teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res, next) => {
   try {
