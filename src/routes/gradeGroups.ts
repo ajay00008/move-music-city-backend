@@ -11,53 +11,83 @@ import { GradeGroup } from '../entities/GradeGroup';
 
 export const gradeGroupRoutes = Router();
 
-// Public: list grade groups for teacher signup (no auth). Returns all grade groups so signup always has options.
-// Optional ?schoolId=:id returns only global + that school's grade groups.
+// Public: list grade groups with global prizes (no auth).
+// Optional ?schoolId=:id keeps grade-group filtering behavior, but prizes are always global tiers.
 gradeGroupRoutes.get('/list', async (req, res, next) => {
   try {
     const schoolId = (req.query.schoolId as string)?.trim() || null;
     const gradeGroupRepo = getGradeGroupRepository();
+    const prizeRepo = getPrizeRepository();
 
     const where = schoolId
       ? [{ deletedAt: IsNull(), schoolId: IsNull() }, { deletedAt: IsNull(), schoolId }]
       : { deletedAt: IsNull() };
 
-    const gradeGroups = await gradeGroupRepo.find({
-      where,
-      select: ['id', 'name', 'label'],
-      order: { name: 'ASC' },
-    });
-    res.json({ data: gradeGroups });
+    const [gradeGroups, globalPrizes] = await Promise.all([
+      gradeGroupRepo.find({
+        where,
+        select: ['id', 'name', 'label'],
+        order: { name: 'ASC' },
+      }),
+      prizeRepo.find({
+        where: { deletedAt: IsNull(), schoolId: IsNull() },
+        order: { minutesRequired: 'ASC', createdAt: 'ASC' },
+      }),
+    ]);
+
+    const prizesByGradeGroupId = new Map<string, typeof globalPrizes>();
+    for (const prize of globalPrizes) {
+      const list = prizesByGradeGroupId.get(prize.gradeGroupId) ?? [];
+      list.push(prize);
+      prizesByGradeGroupId.set(prize.gradeGroupId, list);
+    }
+
+    const data = gradeGroups.map((gradeGroup) => ({
+      ...gradeGroup,
+      prizes: prizesByGradeGroupId.get(gradeGroup.id) ?? [],
+    }));
+
+    res.json({ data });
   } catch (error) {
     next(error);
   }
 });
 
-// Get all grade groups (global list for school admin to pick when creating teachers)
+// Get all grade groups (includes global prizes per group)
 gradeGroupRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
     const gradeGroupRepo = getGradeGroupRepository();
+    const prizeRepo = getPrizeRepository();
 
-    let where: any = { deletedAt: IsNull() };
+    // Do not scope by requesting user's school; return full grade-group catalog.
+    const where: any = { deletedAt: IsNull() };
 
-    // School admins see global grade groups + grade groups for their school
-    if (req.user?.role === 'school_admin' && req.user.schoolId) {
-      where = [
-        { deletedAt: IsNull(), schoolId: IsNull() },
-        { deletedAt: IsNull(), schoolId: req.user.schoolId },
-      ];
+    const [gradeGroups, globalPrizes] = await Promise.all([
+      gradeGroupRepo.find({
+        where,
+        order: { createdAt: 'ASC' },
+        relations: ['classes'],
+      }),
+      prizeRepo.find({
+        where: { deletedAt: IsNull(), schoolId: IsNull() },
+        order: { minutesRequired: 'ASC', createdAt: 'ASC' },
+      }),
+    ]);
+
+    const prizesByGradeGroupId = new Map<string, typeof globalPrizes>();
+    for (const prize of globalPrizes) {
+      const list = prizesByGradeGroupId.get(prize.gradeGroupId) ?? [];
+      list.push(prize);
+      prizesByGradeGroupId.set(prize.gradeGroupId, list);
     }
-    // Super admin sees all (no extra filter)
-
-    const gradeGroups = await gradeGroupRepo.find({
-      where,
-      order: { createdAt: 'ASC' },
-      relations: ['classes'],
-    });
 
     const data = gradeGroups.map((gg) => {
       const { classes: _c, ...rest } = gg;
-      return { ...rest, classIds: gg.classes?.map((c) => c.id) ?? [] };
+      return {
+        ...rest,
+        classIds: gg.classes?.map((c) => c.id) ?? [],
+        prizes: prizesByGradeGroupId.get(gg.id) ?? [],
+      };
     });
 
     res.json({ data });
