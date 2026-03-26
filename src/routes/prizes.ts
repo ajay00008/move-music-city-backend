@@ -41,9 +41,10 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       deletedAt: IsNull(),
     };
 
-    // School admins see global + their school's prizes; super_admin sees all
-    if (req.user?.role === 'school_admin' && req.user.schoolId) {
-      where.schoolId = In([req.user.schoolId, null]);
+    // If gradeGroupId is provided, return all prizes under that grade group only.
+    // No school scoping from DB or token should apply.
+    if (gradeGroupId) {
+      where.gradeGroupId = gradeGroupId;
     } else if (req.user?.role === 'teacher') {
       // Teachers: show all prizes for their assigned grade groups (global grade groups = prizes can be any schoolId or null)
       const teacherGradeGroupIds = req.user.teacherGradeGroupIds ?? [];
@@ -72,10 +73,6 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       // Teachers see prizes for their grade groups only; no schoolId filter (global grade groups)
     } else if (req.user?.role !== 'super_admin') {
       where.schoolId = Not(IsNull());
-    }
-
-    if (gradeGroupId) {
-      where.gradeGroupId = gradeGroupId;
     }
 
     const [prizes, total] = await Promise.all([

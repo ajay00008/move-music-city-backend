@@ -91,7 +91,8 @@ export const authenticate = async (
       id: user.id,
       email: user.email,
       role: user.role,
-      schoolId: user.schoolId,
+      // Prefer canonical DB value, but fall back to token for legacy/incomplete records.
+      schoolId: user.schoolId ?? decoded.schoolId ?? null,
     };
 
     next();
