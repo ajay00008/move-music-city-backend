@@ -481,7 +481,7 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
         gradeGroupId: ep.prize?.gradeGroupId ?? null,
         gradeGroupName: ep.prize?.gradeGroup?.label || ep.prize?.gradeGroup?.name || '—',
         teacherName: resolveTeacherName(schoolIdForRow, ep.prize?.gradeGroupId, ep.teacher?.name, ep.class, teacherIndex),
-        studentCount: ep.class?.studentCount ?? 0,
+        studentCount: ep.class?.studentCount ?? ep.teacher?.studentCount ?? 0,
         schoolId: schoolIdForRow,
         earnedAt: ep.earnedAt.toISOString().split('T')[0],
         delivered: ep.delivered,

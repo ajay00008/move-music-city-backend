@@ -31,7 +31,7 @@ function gradeGroupMatchesTeacher(gradeGroup: { grades: string | null }, teacher
 // Get all prizes
 prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
-    const { gradeGroupId, classId, page = '1', limit = '10' } = req.query;
+    const { gradeGroupId, classId, page = '1', limit = '50' } = req.query;
     const pageNum = parseInt(page as string);
     const limitNum = Math.min(parseInt(limit as string) || 50, 100);
     const prizeRepo = getPrizeRepository();
