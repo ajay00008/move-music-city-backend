@@ -200,7 +200,7 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       password: await hashPassword(password),
       phone: '',
       grade: gradeLabel,
-      studentCount: studentCount ?? 0,
+      studentCount,
       schoolId: schoolId ?? null,
       gradeGroupId,
       signupCode: null,
