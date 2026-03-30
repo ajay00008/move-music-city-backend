@@ -224,14 +224,14 @@ export const swaggerDocument = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['name', 'email', 'password', 'gradeGroupId'],
+                required: ['name', 'email', 'password', 'gradeGroupId', 'studentCount'],
                 properties: {
                   name: { type: 'string' },
                   email: { type: 'string', format: 'email' },
                   password: { type: 'string', minLength: 6 },
                   schoolId: { type: 'string', format: 'uuid', nullable: true },
                   gradeGroupId: { type: 'string', format: 'uuid' },
-                  studentCount: { type: 'integer', minimum: 0, default: 0 },
+                  studentCount: { type: 'integer', minimum: 1 },
                   status: { type: 'string', enum: ['active', 'inactive'], default: 'active' },
                 },
               },
