@@ -10,6 +10,7 @@ import {
   updateTeacherProfileSchema,
   changeTeacherPasswordSchema,
   teacherProfileImageUploadUrlSchema,
+  resetTeacherAccountSchema,
 } from '../validations/teacher';
 import { addMinutesSchema } from '../validations/class';
 import { comparePassword, hashPassword } from '../lib/utils';
@@ -17,6 +18,13 @@ import { IsNull, ILike, Not, In } from 'typeorm';
 import { Status as TeacherStatus } from '../entities/Teacher';
 import { emitSchoolPrizeEarned } from '../socket/emitter';
 import { createTeacherProfileImageUploadUrl } from '../lib/s3';
+import {
+  applyGradeGroupsToTeacher,
+  findActiveTeacherByEmail,
+  findSoftDeletedTeacherByEmail,
+  resolvePrimaryGradeGroupId,
+  resolveTeacherGradeGroupIds,
+} from '../lib/teacherUtils';
 
 const FALLBACK_STEP = 100;
 function getCumulativeThresholds(prizes: { minutesRequired: number }[]): number[] {
@@ -220,17 +228,18 @@ teacherRoutes.get('/me/progress', authenticate, async (req: AuthRequest, res, ne
     const prizeRepo = getPrizeRepository();
     const teacher = await teacherRepo.findOne({
       where: { id: req.user!.id, deletedAt: IsNull() },
-      select: ['id', 'fitnessMinutes', 'earnedPrizesCount', 'gradeGroupId'],
+      relations: ['gradeGroups'],
     });
     if (!teacher) {
       throw new AppError('Teacher not found', 404);
     }
     const totalMinutes = teacher.fitnessMinutes ?? 0;
     const earnedPrizesCount = teacher.earnedPrizesCount ?? 0;
+    const primaryGradeGroupId = resolvePrimaryGradeGroupId(teacher);
     let prizes: { minutesRequired: number }[] = [];
-    if (teacher.gradeGroupId) {
+    if (primaryGradeGroupId) {
       const list = await prizeRepo.find({
-        where: { gradeGroupId: teacher.gradeGroupId, deletedAt: IsNull() },
+        where: { gradeGroupId: primaryGradeGroupId, deletedAt: IsNull() },
         order: { minutesRequired: 'ASC', createdAt: 'ASC' },
         select: ['minutesRequired'],
       });
@@ -267,13 +276,20 @@ teacherRoutes.post(
       const earnedPrizeRepo = getEarnedPrizeRepository();
       const teacher = await teacherRepo.findOne({
         where: { id: req.user!.id, deletedAt: IsNull() },
+        relations: ['gradeGroups'],
       });
-      if (!teacher || !teacher.gradeGroupId) {
+      const primaryGradeGroupId = teacher ? resolvePrimaryGradeGroupId(teacher) : null;
+      if (!teacher || !primaryGradeGroupId) {
         throw new AppError('Teacher or grade group not found', 404);
+      }
+      // Keep singular column in sync when only M2M was populated.
+      if (!teacher.gradeGroupId) {
+        teacher.gradeGroupId = primaryGradeGroupId;
+        await teacherRepo.save(teacher);
       }
       const newFitnessMinutes = (teacher.fitnessMinutes ?? 0) + minutes;
       const prizes = await prizeRepo.find({
-        where: { gradeGroupId: teacher.gradeGroupId, deletedAt: IsNull() },
+        where: { gradeGroupId: primaryGradeGroupId, deletedAt: IsNull() },
         order: { minutesRequired: 'ASC', createdAt: 'ASC' },
         select: ['id', 'minutesRequired'],
       });
@@ -304,7 +320,7 @@ teacherRoutes.post(
             schoolId: teacher.schoolId,
             teacherId: teacher.id,
             teacherName: teacher.name,
-            gradeGroupId: teacher.gradeGroupId,
+            gradeGroupId: primaryGradeGroupId,
             prizeId: newlyEarned[newlyEarned.length - 1]?.id ?? null,
             earnedPrizesCount: newEarnedCount,
             newEarnedPrizes: newEarnedCount - previousEarnedCount,
@@ -628,32 +644,39 @@ teacherRoutes.post(
       const primary = gradeGroups[0];
       const gradeLabel = primary.label || primary.name || '';
 
-      const existing = await teacherRepo.findOne({
-        where: { email: email.toLowerCase(), deletedAt: IsNull() },
-      });
-      if (existing) {
+      const existingActive = await findActiveTeacherByEmail(teacherRepo, email);
+      if (existingActive) {
         throw new AppError('Teacher with this email already exists', 400);
       }
 
-      const teacher = teacherRepo.create({
-        name,
-        email: email.toLowerCase(),
-        phone: '',
-        grade: gradeLabel,
-        studentCount: studentCount ?? 0,
-        schoolId: resolvedSchoolId,
-        gradeGroupId: primary.id,
-        status: status || 'active',
-      });
+      // Revive soft-deleted row for this email instead of minting a new id
+      // (keeps phone app JWTs valid after admin "reset" = delete + recreate).
+      const softDeleted = await findSoftDeletedTeacherByEmail(teacherRepo, email);
+      const teacher =
+        softDeleted ??
+        teacherRepo.create({
+          email: email.toLowerCase(),
+          phone: '',
+        });
+
+      teacher.name = name;
+      teacher.email = email.toLowerCase();
+      teacher.phone = teacher.phone || '';
+      teacher.grade = gradeLabel;
+      teacher.studentCount = studentCount ?? 0;
+      teacher.schoolId = resolvedSchoolId;
+      teacher.status = status || TeacherStatus.ACTIVE;
+      teacher.deletedAt = null;
+      applyGradeGroupsToTeacher(teacher, gradeGroups);
       if (req.body.password) {
         teacher.password = await hashPassword(req.body.password);
       }
-      teacher.gradeGroups = gradeGroups;
       const savedTeacher = await teacherRepo.save(teacher);
-      const { password: _pw, signupCode: _sc, phone: _p, ...teacherData } = savedTeacher;
+      const { password: _pw, signupCode: _sc, phone: _p, gradeGroups: _gg, ...teacherData } = savedTeacher;
 
-      res.status(201).json({
+      res.status(softDeleted ? 200 : 201).json({
         success: true,
+        revived: !!softDeleted,
         data: { ...teacherData, gradeGroupIds: gradeGroups.map((g) => g.id) },
       });
     } catch (error) {
@@ -735,20 +758,16 @@ teacherRoutes.put(
           : undefined;
       if (requestedGradeGroupIds !== undefined) {
         if (requestedGradeGroupIds.length === 0) {
-          existing.gradeGroupId = null;
-          existing.grade = '';
-          existing.gradeGroups = [];
-        } else {
-          const gradeGroups = await gradeGroupRepo.find({
-            where: { id: In(requestedGradeGroupIds), deletedAt: IsNull() },
-          });
-          if (gradeGroups.length !== requestedGradeGroupIds.length) {
-            throw new AppError('One or more grade groups not found', 404);
-          }
-          existing.gradeGroupId = gradeGroups[0].id;
-          existing.grade = gradeGroups[0].label || gradeGroups[0].name || '';
-          existing.gradeGroups = gradeGroups;
+          // Clearing all grade groups breaks the teacher app ("No prizes for your grade").
+          throw new AppError('At least one grade group is required', 400);
         }
+        const gradeGroups = await gradeGroupRepo.find({
+          where: { id: In(requestedGradeGroupIds), deletedAt: IsNull() },
+        });
+        if (gradeGroups.length !== requestedGradeGroupIds.length) {
+          throw new AppError('One or more grade groups not found', 404);
+        }
+        applyGradeGroupsToTeacher(existing, gradeGroups);
         delete updateData.gradeGroupIds;
         delete updateData.gradeGroupId;
       }
@@ -772,6 +791,87 @@ teacherRoutes.put(
       res.json({
         success: true,
         data: { ...updatedData, gradeGroupIds },
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+// Reset/reactivate teacher account WITHOUT changing id (preferred over delete+recreate).
+teacherRoutes.post(
+  '/:id/reset-account',
+  authenticate,
+  validate(resetTeacherAccountSchema),
+  async (req: AuthRequest, res, next) => {
+    try {
+      const { id } = req.params;
+      const { password, gradeGroupId, gradeGroupIds, resetProgress, status } = req.body;
+      const teacherRepo = getTeacherRepository();
+      const gradeGroupRepo = getGradeGroupRepository();
+      const earnedPrizeRepo = getEarnedPrizeRepository();
+
+      const teacher = await teacherRepo.findOne({
+        where: { id },
+        withDeleted: true,
+        relations: ['gradeGroups'],
+      });
+      if (!teacher) {
+        throw new AppError('Teacher not found', 404);
+      }
+
+      const isSuperAdmin = req.user?.role === 'super_admin';
+      const isSchoolAdmin =
+        req.user?.role === 'school_admin' &&
+        teacher.schoolId != null &&
+        req.user.schoolId === teacher.schoolId;
+      if (!isSuperAdmin && !isSchoolAdmin) {
+        throw new AppError('Forbidden - Access denied', 403);
+      }
+
+      const ids =
+        Array.isArray(gradeGroupIds) && gradeGroupIds.length > 0
+          ? gradeGroupIds
+          : gradeGroupId
+            ? [gradeGroupId]
+            : resolveTeacherGradeGroupIds(teacher);
+
+      if (ids.length === 0) {
+        throw new AppError('At least one grade group is required to reset this account', 400);
+      }
+
+      const gradeGroups = await gradeGroupRepo.find({
+        where: { id: In(ids), deletedAt: IsNull() },
+      });
+      if (gradeGroups.length !== ids.length) {
+        throw new AppError('One or more grade groups not found', 404);
+      }
+
+      teacher.deletedAt = null;
+      teacher.status = status === 'inactive' ? TeacherStatus.INACTIVE : TeacherStatus.ACTIVE;
+      applyGradeGroupsToTeacher(teacher, gradeGroups);
+
+      if (password) {
+        teacher.password = await hashPassword(password);
+      }
+
+      if (resetProgress) {
+        teacher.fitnessMinutes = 0;
+        teacher.earnedPrizesCount = 0;
+        await earnedPrizeRepo.update(
+          { teacherId: teacher.id, deletedAt: IsNull() },
+          { deletedAt: new Date() }
+        );
+      }
+
+      const saved = await teacherRepo.save(teacher);
+      const { password: _pw, signupCode: _sc, phone: _p, gradeGroups: _gg, ...safe } = saved;
+
+      res.json({
+        success: true,
+        message:
+          'Teacher account reset successfully. Same account id kept — teachers should not need a new login if already signed in.',
+        data: { ...safe, gradeGroupIds: gradeGroups.map((g) => g.id) },
       });
     } catch (error) {
       next(error);

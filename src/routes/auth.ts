@@ -13,6 +13,11 @@ import {
 } from '../validations/auth';
 import { IsNull } from 'typeorm';
 import { Status as TeacherStatus } from '../entities/Teacher';
+import {
+  applyGradeGroupsToTeacher,
+  findActiveTeacherByEmail,
+  findSoftDeletedTeacherByEmail,
+} from '../lib/teacherUtils';
 
 export const authRoutes = Router();
 
@@ -178,10 +183,8 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
     const teacherRepo = getTeacherRepository();
     const gradeGroupRepo = getGradeGroupRepository();
 
-    const existing = await teacherRepo.findOne({
-      where: { email: email.toLowerCase(), deletedAt: IsNull() },
-    });
-    if (existing) {
+    const existingActive = await findActiveTeacherByEmail(teacherRepo, email);
+    if (existingActive) {
       throw new AppError('A teacher with this email already exists', 400);
     }
 
@@ -192,26 +195,36 @@ authRoutes.post('/teacher/signup', validate(teacherSignupSchema), async (req, re
       throw new AppError('Grade group not found', 404);
     }
 
-    const gradeLabel = gradeGroup.label || gradeGroup.name || '';
+    // Revive soft-deleted account for this email so app JWT id stays stable.
+    const softDeleted = await findSoftDeletedTeacherByEmail(teacherRepo, email);
+    const teacher =
+      softDeleted ??
+      teacherRepo.create({
+        email: email.toLowerCase(),
+        phone: '',
+        signupCode: null,
+      });
 
-    const teacher = teacherRepo.create({
-      name,
-      email: email.toLowerCase(),
-      password: await hashPassword(password),
-      phone: '',
-      grade: gradeLabel,
-      studentCount,
-      schoolId: schoolId ?? null,
-      gradeGroupId,
-      signupCode: null,
-      status: (status === 'inactive' ? TeacherStatus.INACTIVE : TeacherStatus.ACTIVE),
-    });
+    teacher.name = name;
+    teacher.email = email.toLowerCase();
+    teacher.password = await hashPassword(password);
+    teacher.phone = teacher.phone || '';
+    teacher.studentCount = studentCount;
+    teacher.schoolId = schoolId ?? teacher.schoolId ?? null;
+    teacher.signupCode = null;
+    teacher.status = status === 'inactive' ? TeacherStatus.INACTIVE : TeacherStatus.ACTIVE;
+    teacher.deletedAt = null;
+    applyGradeGroupsToTeacher(teacher, [gradeGroup]);
+
     const saved = await teacherRepo.save(teacher);
 
-    res.status(201).json({
+    res.status(softDeleted ? 200 : 201).json({
       success: true,
+      revived: !!softDeleted,
       teacher: { id: saved.id },
-      message: 'Account created. You can log in.',
+      message: softDeleted
+        ? 'Existing account restored. You can log in.'
+        : 'Account created. You can log in.',
     });
   } catch (error) {
     next(error);

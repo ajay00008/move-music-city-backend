@@ -42,3 +42,13 @@ export const teacherProfileImageUploadUrlSchema = z.object({
   contentType: z.string().min(1, 'contentType is required'),
   extension: z.string().min(1).max(8).optional(),
 });
+
+/** Re-activate / repair a teacher without creating a new id (keeps app JWT valid). */
+export const resetTeacherAccountSchema = z.object({
+  password: z.string().min(6, 'Password must be at least 6 characters').optional(),
+  gradeGroupId: z.string().uuid().optional(),
+  gradeGroupIds: z.array(z.string().uuid()).optional(),
+  /** If true, wipe fitness minutes / earned prizes. Default false. */
+  resetProgress: z.boolean().optional().default(false),
+  status: z.enum(['active', 'inactive']).optional().default('active'),
+});

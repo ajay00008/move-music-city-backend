@@ -53,7 +53,14 @@ export const authenticate = async (
         where: { id: decoded.id, deletedAt: IsNull() },
         relations: ['gradeGroups'],
       });
-      if (!teacher || teacher.status === 'inactive') {
+      if (!teacher) {
+        // Soft-deleted / recreated accounts leave old JWTs pointing at a missing id.
+        throw new AppError(
+          'Unauthorized - Teacher not found or inactive. Please log out and log back in.',
+          401
+        );
+      }
+      if (teacher.status === 'inactive') {
         throw new AppError('Unauthorized - Teacher not found or inactive', 401);
       }
       const gradeGroupIds = (teacher.gradeGroups?.map((g) => g.id) ?? []).length > 0

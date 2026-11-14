@@ -12,8 +12,7 @@
     "migration:run": "npm run build && node dist/run-migrations.js",
     "migration:run:prod": "node dist/run-migrations.js",
     "migration:revert": "npm run typeorm -- migration:revert -d ./data-source.ts",
-    "seed": "tsx src/seed.ts",
-    "preinstall": "node dist/setup.js"
+    "seed": "tsx src/seed.ts"
   },
   "keywords": [
     "school",
