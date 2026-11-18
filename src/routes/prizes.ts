@@ -41,36 +41,54 @@ prizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
       deletedAt: IsNull(),
     };
 
-    // If gradeGroupId is provided, return all prizes under that grade group only.
-    // No school scoping from DB or token should apply.
-    if (gradeGroupId) {
-      where.gradeGroupId = gradeGroupId;
-    } else if (req.user?.role === 'teacher') {
-      // Teachers: show all prizes for their assigned grade groups (global grade groups = prizes can be any schoolId or null)
+    // Teachers: always resolve from their assigned grade groups.
+    // Ignore stale/wrong ?gradeGroupId from old app caches (common cause of "No prizes for your grade").
+    if (req.user?.role === 'teacher') {
       const teacherGradeGroupIds = req.user.teacherGradeGroupIds ?? [];
-      if (teacherGradeGroupIds.length > 0) {
-        where.gradeGroupId = In(teacherGradeGroupIds);
+      const teacherGradeGroupId = req.user.teacherGradeGroupId ?? null;
+      const assignedIds =
+        teacherGradeGroupIds.length > 0
+          ? teacherGradeGroupIds
+          : teacherGradeGroupId
+            ? [teacherGradeGroupId]
+            : [];
+
+      let resolvedIds = assignedIds;
+      if (typeof gradeGroupId === 'string' && gradeGroupId) {
+        if (assignedIds.includes(gradeGroupId)) {
+          resolvedIds = [gradeGroupId];
+        }
+        // else: ignore stale query param and keep assignedIds
+      }
+
+      if (resolvedIds.length > 0) {
+        where.gradeGroupId = resolvedIds.length === 1 ? resolvedIds[0] : In(resolvedIds);
       } else {
-        const teacherGradeGroupId = req.user.teacherGradeGroupId ?? null;
-        if (teacherGradeGroupId) {
-          where.gradeGroupId = teacherGradeGroupId;
+        const teacherGrade = req.user.teacherGrade ?? null;
+        if (teacherGrade && req.user.schoolId) {
+          const schoolGradeGroups = await gradeGroupRepo.find({
+            where: [
+              { schoolId: req.user.schoolId, deletedAt: IsNull() },
+              { schoolId: IsNull(), deletedAt: IsNull() },
+            ],
+            select: ['id', 'grades'],
+          });
+          const matchingGradeGroupIds = schoolGradeGroups
+            .filter((gg) => gradeGroupMatchesTeacher(gg, teacherGrade))
+            .map((gg) => gg.id);
+          where.gradeGroupId = In(
+            matchingGradeGroupIds.length > 0
+              ? matchingGradeGroupIds
+              : ['00000000-0000-0000-0000-000000000000']
+          );
         } else {
-          const teacherGrade = req.user.teacherGrade ?? null;
-          if (teacherGrade && req.user.schoolId) {
-            const schoolGradeGroups = await gradeGroupRepo.find({
-              where: [{ schoolId: req.user.schoolId, deletedAt: IsNull() }, { schoolId: IsNull(), deletedAt: IsNull() }],
-              select: ['id', 'grades'],
-            });
-            const matchingGradeGroupIds = schoolGradeGroups
-              .filter((gg) => gradeGroupMatchesTeacher(gg, teacherGrade))
-              .map((gg) => gg.id);
-            where.gradeGroupId = In(matchingGradeGroupIds.length > 0 ? matchingGradeGroupIds : ['00000000-0000-0000-0000-000000000000']);
-          } else {
-            where.gradeGroupId = In(['00000000-0000-0000-0000-000000000000']);
-          }
+          where.gradeGroupId = In(['00000000-0000-0000-0000-000000000000']);
         }
       }
       // Teachers see prizes for their grade groups only; no schoolId filter (global grade groups)
+    } else if (gradeGroupId) {
+      // Admin/super_admin: honor explicit gradeGroupId filter.
+      where.gradeGroupId = gradeGroupId;
     } else if (req.user?.role !== 'super_admin') {
       where.schoolId = Not(IsNull());
     }

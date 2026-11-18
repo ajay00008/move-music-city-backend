@@ -442,27 +442,45 @@ teacherRoutes.get('/me/leaderboard', authenticate, async (req: AuthRequest, res,
   }
 });
 
+async function getCurrentTeacherPayload(teacherId: string) {
+  const teacherRepo = getTeacherRepository();
+  const teacher = await teacherRepo.findOne({
+    where: { id: teacherId, deletedAt: IsNull() },
+    relations: ['gradeGroups'],
+  });
+  if (!teacher) {
+    throw new AppError('Teacher not found', 404);
+  }
+  const { password: _pw, signupCode: _sc, phone: _p, gradeGroups: _gg, ...rest } = teacher;
+  const gradeGroupIds = resolveTeacherGradeGroupIds(teacher);
+  // Keep singular column populated so older app builds keep working.
+  if (!rest.gradeGroupId && gradeGroupIds[0]) {
+    rest.gradeGroupId = gradeGroupIds[0];
+  }
+  return { ...rest, gradeGroupIds };
+}
+
+// Current teacher (many app builds call GET /teachers/me).
+teacherRoutes.get('/me', authenticate, async (req: AuthRequest, res, next) => {
+  try {
+    if (req.user?.role !== 'teacher') {
+      throw new AppError('Forbidden - Teachers only', 403);
+    }
+    const data = await getCurrentTeacherPayload(req.user.id);
+    res.json({ success: true, data });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get current teacher profile (teacher-only)
 teacherRoutes.get('/me/profile', authenticate, async (req: AuthRequest, res, next) => {
   try {
     if (req.user?.role !== 'teacher') {
       throw new AppError('Forbidden - Teachers only', 403);
     }
-    const teacherRepo = getTeacherRepository();
-    const teacher = await teacherRepo.findOne({
-      where: { id: req.user.id, deletedAt: IsNull() },
-      relations: ['gradeGroups'],
-    });
-    if (!teacher) {
-      throw new AppError('Teacher not found', 404);
-    }
-    const { password: _pw, signupCode: _sc, ...safe } = teacher;
-    const gradeGroupIds = (teacher.gradeGroups ?? []).length > 0
-      ? teacher.gradeGroups.map((g) => g.id)
-      : teacher.gradeGroupId
-        ? [teacher.gradeGroupId]
-        : [];
-    res.json({ data: { ...safe, gradeGroupIds } });
+    const data = await getCurrentTeacherPayload(req.user.id);
+    res.json({ data });
   } catch (error) {
     next(error);
   }
@@ -560,10 +578,17 @@ teacherRoutes.post(
   }
 );
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
 // Get teacher by ID
 teacherRoutes.get('/:id', authenticate, async (req: AuthRequest, res, next) => {
   try {
     const { id } = req.params;
+    // Prevent `/teachers/me` (or other non-uuid paths) from crashing as invalid uuid.
+    if (!UUID_RE.test(id)) {
+      throw new AppError('Teacher not found', 404);
+    }
     const teacherRepo = getTeacherRepository();
 
     const teacher = await teacherRepo.findOne({
