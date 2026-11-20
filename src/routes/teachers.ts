@@ -344,7 +344,8 @@ teacherRoutes.post(
   }
 );
 
-// Reset current teacher progress (minutes + earned prizes count + earned prize rows)
+// Reset current teacher progress (minutes).
+// Never remove undelivered earned prizes — those are tracked on the admin dash for delivery.
 teacherRoutes.post('/me/reset-progress', authenticate, async (req: AuthRequest, res, next) => {
   try {
     if (req.user?.role !== 'teacher') {
@@ -352,27 +353,59 @@ teacherRoutes.post('/me/reset-progress', authenticate, async (req: AuthRequest, 
     }
     const teacherRepo = getTeacherRepository();
     const earnedPrizeRepo = getEarnedPrizeRepository();
+    const prizeRepo = getPrizeRepository();
     const teacher = await teacherRepo.findOne({
       where: { id: req.user.id, deletedAt: IsNull() },
+      relations: ['gradeGroups'],
     });
     if (!teacher) {
       throw new AppError('Teacher not found', 404);
     }
-    teacher.fitnessMinutes = 0;
-    teacher.earnedPrizesCount = 0;
-    await teacherRepo.save(teacher);
+
+    // Soft-delete only already-delivered rows. Keep pending admin deliveries.
     await earnedPrizeRepo.update(
-      { teacherId: teacher.id, deletedAt: IsNull() },
+      { teacherId: teacher.id, deletedAt: IsNull(), delivered: true },
       { deletedAt: new Date() }
+    );
+
+    const pendingCount = await earnedPrizeRepo.count({
+      where: { teacherId: teacher.id, deletedAt: IsNull(), delivered: false },
+    });
+
+    const primaryGradeGroupId = resolvePrimaryGradeGroupId(teacher);
+    let prizes: { minutesRequired: number }[] = [];
+    if (primaryGradeGroupId) {
+      prizes = await prizeRepo.find({
+        where: { gradeGroupId: primaryGradeGroupId, deletedAt: IsNull() },
+        order: { minutesRequired: 'ASC', createdAt: 'ASC' },
+        select: ['minutesRequired'],
+      });
+    }
+    const cumulative = getCumulativeThresholds(prizes);
+    // Keep minutes in sync with remaining earned count so add-minutes won't recreate duplicates.
+    const syncedMinutes =
+      pendingCount > 0 ? cumulative[Math.min(pendingCount, cumulative.length) - 1] ?? 0 : 0;
+
+    teacher.fitnessMinutes = syncedMinutes;
+    teacher.earnedPrizesCount = pendingCount;
+    await teacherRepo.save(teacher);
+
+    const { currentSegmentMinutes, minutesForNextPrize } = getSegmentProgress(
+      syncedMinutes,
+      pendingCount,
+      prizes
     );
     res.json({
       success: true,
-      message: 'Progress reset successfully',
+      message:
+        pendingCount > 0
+          ? 'Progress reset. Undelivered prizes were kept for your school admin.'
+          : 'Progress reset successfully',
       data: {
-        fitnessMinutes: 0,
-        earnedPrizesCount: 0,
-        currentSegmentMinutes: 0,
-        minutesForNextPrize: FALLBACK_STEP,
+        fitnessMinutes: syncedMinutes,
+        earnedPrizesCount: pendingCount,
+        currentSegmentMinutes,
+        minutesForNextPrize,
       },
     });
   } catch (error) {
@@ -881,12 +914,31 @@ teacherRoutes.post(
       }
 
       if (resetProgress) {
-        teacher.fitnessMinutes = 0;
-        teacher.earnedPrizesCount = 0;
+        // Keep undelivered prizes visible on the admin dash.
         await earnedPrizeRepo.update(
-          { teacherId: teacher.id, deletedAt: IsNull() },
+          { teacherId: teacher.id, deletedAt: IsNull(), delivered: true },
           { deletedAt: new Date() }
         );
+        const pendingCount = await earnedPrizeRepo.count({
+          where: { teacherId: teacher.id, deletedAt: IsNull(), delivered: false },
+        });
+        const prizeRepo = getPrizeRepository();
+        const primaryGradeGroupId = resolvePrimaryGradeGroupId({
+          gradeGroupId: teacher.gradeGroupId,
+          gradeGroups,
+        });
+        let prizes: { minutesRequired: number }[] = [];
+        if (primaryGradeGroupId) {
+          prizes = await prizeRepo.find({
+            where: { gradeGroupId: primaryGradeGroupId, deletedAt: IsNull() },
+            order: { minutesRequired: 'ASC', createdAt: 'ASC' },
+            select: ['minutesRequired'],
+          });
+        }
+        const cumulative = getCumulativeThresholds(prizes);
+        teacher.fitnessMinutes =
+          pendingCount > 0 ? cumulative[Math.min(pendingCount, cumulative.length) - 1] ?? 0 : 0;
+        teacher.earnedPrizesCount = pendingCount;
       }
 
       const saved = await teacherRepo.save(teacher);
