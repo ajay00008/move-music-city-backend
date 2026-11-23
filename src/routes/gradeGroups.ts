@@ -46,7 +46,6 @@ gradeGroupRoutes.get('/list', async (req, res, next) => {
       ...gradeGroup,
       prizes: prizesByGradeGroupId.get(gradeGroup.id) ?? [],
     }));
-
     res.json({ data });
   } catch (error) {
     next(error);

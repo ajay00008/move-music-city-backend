@@ -35,7 +35,7 @@ dashboardRoutes.get('/stats', authenticate, async (req: AuthRequest, res, next) 
         }),
         teacherRepo.count({
           where: {
-            schoolId: req.user.schoolId,
+            schoolId: req?.user?.schoolId,
             deletedAt: IsNull(),
             status: Status.ACTIVE,
           },
