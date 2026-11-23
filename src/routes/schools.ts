@@ -135,7 +135,7 @@ schoolRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
         ]);
         const adminsList = schoolAdmins.map((a: any) => ({
           id: a.id,
-          name: a.name,
+          name: a.name, 
           email: a.email,
         }));
         const primary = adminsList[0];
@@ -476,6 +476,7 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
       return {
         id: ep.id,
         prizeId: ep.prizeId,
+        prizeName: ep.prize?.name ?? '—',
         classId: ep.classId,
         className: ep.class?.name ?? '—',
         gradeGroupId: ep.prize?.gradeGroupId ?? null,
@@ -488,6 +489,8 @@ schoolRoutes.get('/:schoolId/earned-prizes', authenticate, async (req: AuthReque
       };
     });
 
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
     res.json({ data: formatted });
   } catch (error) {
     next(error);

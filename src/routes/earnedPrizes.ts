@@ -66,9 +66,11 @@ const resolveTeacherName = (
 // Get all earned prizes
 earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => {
   try {
-    const { schoolId, classId, delivered, page = '1', limit = '10' } = req.query;
-    const pageNum = parseInt(page as string);
-    const limitNum = parseInt(limit as string);
+    const { schoolId, classId, delivered, page, limit } = req.query;
+    // Admin dash often calls with no limit; old default of 10 hid most pending prizes.
+    const pageNum = Math.max(parseInt(String(page ?? '1'), 10) || 1, 1);
+    const rawLimit = parseInt(String(limit ?? '500'), 10) || 500;
+    const limitNum = Math.min(Math.max(rawLimit, 1), 1000);
     const earnedPrizeRepo = getEarnedPrizeRepository();
 
     const base = { deletedAt: IsNull() };
@@ -135,6 +137,7 @@ earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => 
       return {
         id: ep.id,
         prizeId: ep.prizeId,
+        prizeName: ep.prize?.name ?? '—',
         classId: ep.classId,
         className: ep.class?.name ?? '—',
         gradeGroupId: ep.prize?.gradeGroupId ?? null,
@@ -146,6 +149,10 @@ earnedPrizeRoutes.get('/', authenticate, async (req: AuthRequest, res, next) => 
         delivered: ep.delivered,
       };
     });
+
+    // Prevent browsers from keeping a stale empty/short list after data restores.
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
 
     res.json({
       data: formatted,
